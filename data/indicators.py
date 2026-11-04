@@ -286,7 +286,13 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_tbm_target(df: pd.DataFrame, pt_mult: float, sl_mult: float, horizon: int) -> pd.DataFrame:
+def add_tbm_target(
+    df: pd.DataFrame,
+    pt_mult: float,
+    sl_mult: float,
+    horizon: int,
+    ambiguous_resolution: str = "stop_first",
+) -> pd.DataFrame:
     """
     Triple Barrier Method (TBM) labeling.
     This creates the "Answer Key" for the AI during training.
@@ -299,6 +305,13 @@ def add_tbm_target(df: pd.DataFrame, pt_mult: float, sl_mult: float, horizon: in
     
     If the price hits the upper barrier first, the answer is 1 (BUY).
     If it hits the lower barrier first, the answer is -1 (SELL).
+
+    Ambiguous Resolution:
+    When both PT and SL barriers are breached inside the same OHLC candle,
+    the intra-candle sequence cannot be known from OHLC data alone.
+    - "stop_first" (default / conservative): Assumes stop was triggered first (-1.0).
+    - "overshoot" (legacy): Chooses the barrier with larger overshoot beyond barrier price.
+    - "exclude": Sets target to NaN (excluded from training).
     """
     df = df.copy()
     atr = df["atr_14"]
@@ -307,6 +320,8 @@ def add_tbm_target(df: pd.DataFrame, pt_mult: float, sl_mult: float, horizon: in
     low = df["low"]
     
     labels = []
+    ambiguous_count = 0
+
     for i in range(len(df)):
         if i >= len(df) - horizon:
             labels.append(np.nan)
@@ -334,15 +349,23 @@ def add_tbm_target(df: pd.DataFrame, pt_mult: float, sl_mult: float, horizon: in
                 label = -1
                 break
             elif hit_pt and hit_sl:
-                # Both hit in same candle? Use the one closer to perfection
-                label = 1 if (future_h.iloc[j] - p_pt) > (p_sl - future_l.iloc[j]) else -1
+                # Both hit in same candle
+                ambiguous_count += 1
+                if ambiguous_resolution == "stop_first":
+                    label = -1  # Conservative stop-first assumption
+                elif ambiguous_resolution == "exclude":
+                    label = np.nan
+                elif ambiguous_resolution == "overshoot":
+                    label = 1 if (future_h.iloc[j] - p_pt) > (p_sl - future_l.iloc[j]) else -1
+                else:
+                    label = -1
                 break
         
         # If no barrier hit, use sign of horizon return
         if label == 0:
             label = 1 if close.iloc[i+horizon] > p_price else -1
             
-        labels.append(float(label))
+        labels.append(float(label) if not np.isnan(label) else np.nan)
         
     df["target"] = labels
     return df

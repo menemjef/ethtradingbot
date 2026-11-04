@@ -194,6 +194,63 @@ def build_windows(
     )
 
 
+def split_train_val_purged(
+    X_candle: np.ndarray,
+    X_market: np.ndarray,
+    y: np.ndarray,
+    train_split: float = 0.8,
+    purge_horizon: int = 12,
+) -> tuple:
+    """
+    Split time-series sliding windows into training and validation sets
+    with strict temporal leakage prevention (purge/embargo).
+
+    Purge Logic:
+    A sample at index `k` has a target derived from price action extending up to `k + purge_horizon`.
+    If the validation set begins at index `split_idx`, any training sample within the window
+    `[split_idx - purge_horizon, split_idx)` has a target that overlaps with prices observed
+    during the validation set.
+    Purging removes these `purge_horizon` boundary samples from the training set,
+    guaranteeing that NO training target incorporates future information from the validation timeline.
+
+    Returns:
+        (X_candle_train, X_market_train, y_train),
+        (X_candle_val, X_market_val, y_val),
+        metadata: {
+            "total_windows": int,
+            "split_idx": int,
+            "purge_size": int,
+            "train_samples": int,
+            "val_samples": int,
+        }
+    """
+    total = len(y)
+    split_idx = int(total * train_split)
+    purge_size = min(max(0, purge_horizon), split_idx)
+    purged_train_end = split_idx - purge_size
+
+    X_c_train = X_candle[:purged_train_end]
+    X_m_train = X_market[:purged_train_end]
+    y_train = y[:purged_train_end]
+
+    X_c_val = X_candle[split_idx:]
+    X_m_val = X_market[split_idx:]
+    y_val = y[split_idx:]
+
+    meta = {
+        "total_windows": total,
+        "split_idx": split_idx,
+        "purge_size": purge_size,
+        "train_samples": len(y_train),
+        "val_samples": len(y_val),
+    }
+    logger.info(
+        "Temporal Split with Purge: %d total windows | Train: %d (purged %d at boundary) | Val: %d",
+        total, len(y_train), purge_size, len(y_val),
+    )
+    return (X_c_train, X_m_train, y_train), (X_c_val, X_m_val, y_val), meta
+
+
 def prepare_live_window(
     df_raw: pd.DataFrame,
     scaler_candle: StandardScaler,

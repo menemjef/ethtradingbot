@@ -148,11 +148,13 @@ def main():
 
     # ── 3. Fit & save scalers ────────────────────────────────────────────────
     # STEP 3: Fit scalers ONLY on training data to prevent lookahead bias (Data Leakage)
-    from config import TRAIN_SPLIT
+    from config import TRAIN_SPLIT, TARGET_HORIZON
     split_idx = int(len(df_feat) * TRAIN_SPLIT)
-    df_train = df_feat.iloc[:split_idx]
+    # Temporal leakage protection: fit scalers strictly on purged training samples
+    purged_train_end = max(0, split_idx - TARGET_HORIZON)
+    df_train = df_feat.iloc[:purged_train_end]
     
-    logger.info("Step 3/5 — Fitting and saving StandardScalers (on train split only)")
+    logger.info("Step 3/5 — Fitting and saving StandardScalers (on purged train split: %d rows)", len(df_train))
     scaler_candle, scaler_market = fit_and_save_scalers(df_train)
 
     # ── 4. Build sliding windows ─────────────────────────────────────────────
@@ -175,7 +177,9 @@ def main():
     # STEP 5: Feed the windows into the CNN + LSTM model and let it learn!
     # It will loop over the data (Epochs) trying to minimize its errors.
     logger.info("Step 5/5 — Training HybridModel")
-    model, val_acc, val_acc_thresh = train_model(X_candle, X_market, y)
+    model, metrics = train_model(X_candle, X_market, y)
+    val_acc = metrics["trading_signal_directional_accuracy"]
+    val_acc_thresh = metrics["threshold_filtered"]["trading_signal_accuracy"]
 
     logger.info("=" * 60)
     logger.info("Training finished. Artifacts saved:")
@@ -185,9 +189,13 @@ def main():
     logger.info("  Scaler2 -> %s", SCALER_MARKET_PATH)
     logger.info("Run  python live.py  to start the live signal engine.")
     logger.info("=" * 60)
-    logger.info("TEST RESULT WINRATE:")
-    logger.info("  Winrate (All signals): %.2f%%", val_acc * 100)
-    logger.info("  Winrate (Threshold > 0.0015): %.2f%%", val_acc_thresh * 100)
+    logger.info("RIGOROUS TEST RESULTS:")
+    logger.info("  Trading Signal Accuracy (Regression Head): %.2f%%", val_acc * 100)
+    logger.info("  Classification Head Directional Accuracy:  %.2f%%", metrics["classification_directional_accuracy"] * 100)
+    logger.info("  Regression MSE: %.4f (Trivial Zero Baseline: %.4f)", metrics["regression_mse"], metrics["trivial_zero_mse"])
+    tf = metrics["threshold_filtered"]
+    logger.info("  Threshold (|pred| >= %.4f) Passing: %d/%d (%.2f%%) | Winrate: %.2f%%",
+                tf["threshold"], tf["samples_passing"], metrics["validation_samples"], tf["pct_passing"], val_acc_thresh * 100)
 
 
 if __name__ == "__main__":

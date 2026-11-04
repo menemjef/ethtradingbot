@@ -118,41 +118,77 @@ def fetch_ohlcv(
     limit: int = 2500,
     since_ms: int | None = None,
     validate: bool = True,
+    warmup_bars: int = 0,
+    exclude_unclosed: bool = True,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV candles for the given symbol/timeframe.
 
+    Guarantees:
+    - Returns the most recent requested number of completed candles up to the latest closed bar.
+    - Excludes currently forming (unclosed) candles.
+    - Correctly paginates across Binance's maximum page size (1000 per call).
+    - Avoids duplicate timestamps, ensures strict chronological ordering, and verifies continuous intervals.
+    - Explicitly reports any shortfall if the exchange cannot supply the requested count.
+
     Args:
-        symbol:     CCXT symbol, e.g. 'ETH/USDT:USDT'
-        timeframe:  Candle size, e.g. '4h'
-        limit:      Number of candles to fetch (max 1500 per request for Binance)
-        since_ms:   Optional start time in milliseconds (UTC epoch)
-        validate:   Whether to validate data quality
+        symbol:           CCXT symbol, e.g. 'ETH/USDT:USDT'
+        timeframe:        Candle size, e.g. '1h', '4h'
+        limit:            Number of completed candles to fetch
+        since_ms:         Optional explicit start time in milliseconds (UTC epoch)
+        validate:         Whether to validate data quality
+        warmup_bars:      Extra pre-roll candles to fetch for indicator warm-up
+        exclude_unclosed: If True, excludes any candle that has not yet closed
 
     Returns:
-        pd.DataFrame with columns [open_time, open, high, low, close, volume]
-        indexed by open_time (UTC aware datetime).
+        pd.DataFrame with columns [open, high, low, close, volume]
+        indexed by open_time (UTC-aware datetime).
     """
     exchange = get_exchange()
+    tf_ms = exchange.parse_timeframe(timeframe) * 1000
+    now_ms = exchange.milliseconds()
+
+    # Total completed candles requested (including warm-up pre-roll)
+    total_needed = limit + max(0, warmup_bars)
+    per_page = 1000
     all_candles = []
 
-    # Binance USDM max limit per call is 1000 for historical pagination
-    per_page = 1000
-    fetched = 0
-    since = since_ms
+    if since_ms is None:
+        # Determine latest completed candle timestamp
+        current_candle_open = (now_ms // tf_ms) * tf_ms
+        latest_completed_open = current_candle_open - tf_ms
+        target_start_ms = latest_completed_open - (total_needed - 1) * tf_ms
+        since = target_start_ms
+        target_end_ms = latest_completed_open
 
-    while fetched < limit:
-        fetch_n = min(per_page, limit - fetched)
-        
-        # If since_ms is None and we need to fetch history, calculate it
-        if since is None:
-            # Approximate timeframe in ms (e.g. 1h = 3,600,000ms)
-            tf_ms = exchange.parse_timeframe(timeframe) * 1000
-            # Buffer extra 10% to ensure enough data after indicator warmup
-            buffer = int(limit * 0.1)
-            since = exchange.milliseconds() - ((limit + buffer) * tf_ms)
-            logger.info("Calculating start time for history: fetching from %d candles ago", limit + buffer)
-        
+        logger.info(
+            "Fetching %d completed %s candles for %s (target range: %s to %s)",
+            total_needed, timeframe, symbol,
+            pd.to_datetime(target_start_ms, unit="ms", utc=True),
+            pd.to_datetime(latest_completed_open, unit="ms", utc=True),
+        )
+    else:
+        since = since_ms
+        target_end_ms = None
+        logger.info(
+            "Fetching up to %d %s candles for %s starting from %s",
+            total_needed, timeframe, symbol,
+            pd.to_datetime(since_ms, unit="ms", utc=True),
+        )
+
+    while True:
+        fetch_n = per_page
+        if target_end_ms is not None:
+            remaining_ms = target_end_ms - since
+            if remaining_ms < 0:
+                break
+            candles_left = int(remaining_ms // tf_ms) + 1
+            fetch_n = min(per_page, max(1, candles_left))
+        else:
+            if len(all_candles) >= total_needed:
+                break
+            fetch_n = min(per_page, total_needed - len(all_candles))
+
         @retry_with_backoff
         def _fetch_with_retry():
             return exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=fetch_n)
@@ -160,20 +196,24 @@ def fetch_ohlcv(
         try:
             raw = _fetch_with_retry()
         except Exception as exc:
-            logger.error("Error fetching OHLCV: %s — giving up after retries", exc)
+            logger.error("Error fetching OHLCV: %s - giving up after retries", exc)
             raise
 
         if not raw:
             break
 
         all_candles.extend(raw)
-        fetched += len(raw)
 
-        # Advance since to just after the last candle fetched
-        since = raw[-1][0] + 1
+        # If we reached or exceeded target end timestamp, stop pagination
+        if target_end_ms is not None and raw[-1][0] >= target_end_ms:
+            break
 
+        # If exchange returns fewer candles than requested page, no more data exists
         if len(raw) < fetch_n:
-            break  # No more data available
+            break
+
+        # Advance since past the last fetched candle
+        since = raw[-1][0] + tf_ms
 
         time.sleep(exchange.rateLimit / 1000)
 
@@ -182,16 +222,55 @@ def fetch_ohlcv(
 
     df = pd.DataFrame(all_candles, columns=["open_time", "open", "high", "low", "close", "volume"])
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df = df.drop_duplicates(subset="open_time").set_index("open_time").sort_index()
+
+    # 1. Exclude currently forming (unfinished) candles
+    if exclude_unclosed:
+        cutoff_ms = now_ms - tf_ms
+        df = df[df["open_time"].astype("int64") // 10**6 <= cutoff_ms]
+
+    # 2. Check and remove duplicate timestamps
+    dup_count = df.duplicated(subset="open_time").sum()
+    if dup_count > 0:
+        logger.warning("Detected %d duplicate timestamps in fetched OHLCV. Deduplicating.", dup_count)
+        df = df.drop_duplicates(subset="open_time", keep="last")
+
+    # 3. Ensure strict chronological order
+    df = df.set_index("open_time").sort_index()
 
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
 
-    # Validate data quality
-    if validate and not validate_data_quality(df):
+    # 4. Check for missing intervals
+    if len(df) > 1:
+        freq_str = f"{int(tf_ms / 1000)}s"
+        expected_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq=freq_str)
+        missing_intervals = expected_range.difference(df.index)
+        if len(missing_intervals) > 0:
+            logger.warning(
+                "Detected %d missing intervals in fetched OHLCV between %s and %s",
+                len(missing_intervals), df.index.min(), df.index.max(),
+            )
+
+    # 5. Check for shortfall against requested completed candles
+    if len(df) < limit:
+        shortfall = limit - len(df)
+        logger.warning(
+            "Shortfall detected in OHLCV fetch for %s %s: requested %d completed candles, "
+            "but only %d were available from exchange (shortfall of %d candles).",
+            symbol, timeframe, limit, len(df), shortfall,
+        )
+    elif len(df) > total_needed:
+        # Trim to the exact requested slice (keeping the most recent completed candles)
+        df = df.iloc[-total_needed:]
+
+    # 6. Validate data quality
+    if validate and not validate_data_quality(df, min_rows=min(10, limit)):
         raise ValueError(f"Data quality validation failed for {symbol} {timeframe}")
 
-    logger.info("Fetched %d candles for %s %s", len(df), symbol, timeframe)
+    logger.info(
+        "Successfully fetched %d completed candles for %s %s (Latest completed bar: %s)",
+        len(df), symbol, timeframe, df.index[-1] if not df.empty else "N/A",
+    )
     return df
 
 
