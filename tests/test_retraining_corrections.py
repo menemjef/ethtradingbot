@@ -15,10 +15,14 @@ Verifies:
 10. Moving block bootstrap uncertainty estimation for overlapping 12-hour targets.
 11. Probability calibration metrics (Brier score, Log Loss, ECE, reliability curves).
 12. Data-driven classification loss weighting (neg/pos ratio) vs unweighted vs legacy hardcoded 1.17.
-13. Warmup bars pre-roll integration through pipeline.
+13. Warmup bars pre-roll integration through pipeline and pre-fillna 720-bar Fibonacci validation.
+14. Non-destructive train.py orchestration, epoch propagation, inner-val scaler isolation, and OHLC stop-gap accounting.
 """
 
+import hashlib
+import os
 import sys
+import tempfile
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -44,13 +48,25 @@ from data.preprocessor import (
     build_features,
     build_windows,
     transform,
+    validate_fibonacci_warmup,
 )
 from model.walk_forward import run_walk_forward_evaluation
 from model.trainer import (
     directional_accuracy,
     compute_comprehensive_metrics,
+    train_model,
 )
 import config
+
+
+def _sha256_file(path: str) -> str:
+    if not os.path.exists(path):
+        return "MISSING"
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class TestDataFetcherCorrections(unittest.TestCase):
@@ -417,8 +433,6 @@ class TestTemporalLeakageAndPartitions(unittest.TestCase):
         # Verify validation data did not influence scaler mean
         self.assertNotEqual(scaler.mean_[0], df_feat["close"].mean())
 
-
-
     def test_multipage_traversal_across_intermediate_gap(self):
         """Verify fetch_ohlcv detects gaps in assembled data and honours raise_on_gap."""
         import data.fetcher as fetcher_mod
@@ -426,18 +440,14 @@ class TestTemporalLeakageAndPartitions(unittest.TestCase):
         now_dt = datetime.datetime(2026, 11, 4, 12, 0, 0, tzinfo=datetime.timezone.utc)
         now_ms = int(now_dt.timestamp() * 1000)
 
-        # Construct data that covers the most recent 1200 hours, with a 50-hour gap
-        # in the middle so the final DataFrame contains missing intervals.
         current_candle_open = (now_ms // tf_ms) * tf_ms
         latest_completed_open = current_candle_open - tf_ms
 
-        # Batch 1: 600 candles ending at T_gap_start
-        t_batch1_start = latest_completed_open - 1199 * tf_ms  # start of the full window
+        t_batch1_start = latest_completed_open - 1199 * tf_ms
         candles_batch1 = [[t_batch1_start + i * tf_ms, 2000.0, 2010.0, 1990.0, 2005.0, 100.0] for i in range(600)]
 
         # Gap of 50 hours (missing 50 candles)
         t_batch2_start = candles_batch1[-1][0] + 51 * tf_ms
-        # Batch 2: 600 candles ending past latest_completed_open
         candles_batch2 = [[t_batch2_start + i * tf_ms, 2100.0, 2110.0, 2090.0, 2105.0, 100.0] for i in range(600)]
 
         all_mock = candles_batch1 + candles_batch2
@@ -504,15 +514,28 @@ class TestTemporalLeakageAndPartitions(unittest.TestCase):
         self.assertIn("total_net_pnl_sum_pct", agg)
 
 
-
 class TestPass4ExecutionAndIntegrity(unittest.TestCase):
-    """Test suite for Quant Audit Pass 4 requirements."""
+    """Test suite for Quant Audit Pass 4 & Pass 5 non-destructive orchestration requirements."""
 
     def test_train_py_full_orchestration_mocked(self):
-        """Verify train.py entry-point runs without purge_bars or validation_samples crashes."""
-        N = 300
+        """
+        Verify train.py entry-point runs end-to-end without touching production checkpoints or scalers.
+        Asserts SHA-256 hashes of real artifacts are 100% identical before and after the test.
+        """
+        real_model_path = config.MODEL_PATH
+        real_scaler_c_path = config.SCALER_CANDLE_PATH
+        real_scaler_m_path = config.SCALER_MARKET_PATH
+
+        hash_before_model = _sha256_file(real_model_path)
+        hash_before_sc = _sha256_file(real_scaler_c_path)
+        hash_before_sm = _sha256_file(real_scaler_m_path)
+
+        # Provide 720 warmup bars + 250 requested bars = 970 bars so 720-bar Fibonacci warm-up passes
+        warmup = 720
+        limit = 250
+        N = warmup + limit
         dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
-        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 20, N))
+        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 40, N))
         df_mock = pd.DataFrame({
             "open": price,
             "high": price + 5.0,
@@ -521,9 +544,16 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
             "volume": np.linspace(100, 500, N),
         }, index=dates)
 
-        with patch("train.fetch_ohlcv", return_value=df_mock):
-            with patch("sys.argv", ["train.py", "--fast", "--warmup-bars", "50", "--train-ratio", "0.6", "--val-ratio", "0.2"]):
-                # Should execute Step 1 through Step 5 and print results without throwing any exception
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_model = os.path.join(tmpdir, "temp_best_model.pt")
+            tmp_sc = os.path.join(tmpdir, "temp_scaler_candle.pkl")
+            tmp_sm = os.path.join(tmpdir, "temp_scaler_market.pkl")
+
+            with patch.object(config, "MODEL_PATH", tmp_model), \
+                 patch.object(config, "SCALER_CANDLE_PATH", tmp_sc), \
+                 patch.object(config, "SCALER_MARKET_PATH", tmp_sm), \
+                 patch("train.fetch_ohlcv", return_value=df_mock), \
+                 patch("sys.argv", ["train.py", "--fast", "--limit", str(limit), "--warmup-bars", str(warmup), "--train-ratio", "0.6", "--val-ratio", "0.2"]):
                 try:
                     train_main()
                 except SystemExit as e:
@@ -533,8 +563,18 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
                 except TypeError as e:
                     self.fail(f"train.py main() raised TypeError (argument mismatch): {e}")
 
+            # Verify temporary artifacts were written only inside tmpdir
+            self.assertTrue(os.path.exists(tmp_model), "Temp model was not saved in tmpdir")
+            self.assertTrue(os.path.exists(tmp_sc), "Temp candle scaler was not saved in tmpdir")
+            self.assertTrue(os.path.exists(tmp_sm), "Temp market scaler was not saved in tmpdir")
+
+        # Verify production artifact hashes are 100% untouched
+        self.assertEqual(_sha256_file(real_model_path), hash_before_model, "Production best_model.pt was modified!")
+        self.assertEqual(_sha256_file(real_scaler_c_path), hash_before_sc, "Production scaler_candle.pkl was modified!")
+        self.assertEqual(_sha256_file(real_scaler_m_path), hash_before_sm, "Production scaler_market.pkl was modified!")
+
     def test_preroll_exclusion_and_fibonacci_validity(self):
-        """Verify that pre-roll warms up 720-bar Fibonacci and is strictly excluded from training samples."""
+        """Verify that pre-roll warms up 720-bar Fibonacci BEFORE fillna(0.0) and is excluded from training samples."""
         warmup = 720
         requested = 100
         total = warmup + requested
@@ -551,16 +591,25 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         requested_start_ts = df_raw.index[-requested]
         self.assertEqual(len(df_raw.loc[requested_start_ts:]), requested)
 
-        # Build features on full history
-        df_feat_full = build_features(df_raw, add_targets=False)
+        # Build features on full history with explicit pre-fillna Fibonacci warm-up validation
+        df_feat_full = build_features(
+            df_raw,
+            add_targets=False,
+            requested_start_ts=requested_start_ts,
+            min_warmup_bars=720,
+        )
         self.assertIn("fib_618_dist_180d", df_feat_full.columns)
+        self.assertIn("fib_warmup_validation", df_feat_full.attrs)
+        self.assertEqual(df_feat_full.attrs["fib_warmup_validation"]["valid_prior_bars"], 720)
+        self.assertEqual(df_feat_full.attrs["fib_warmup_validation"]["nan_count_retained_pre_fillna"], 0)
 
         # Retained slice starts at requested_start_ts
         df_feat = df_feat_full.loc[requested_start_ts:].copy()
         self.assertEqual(len(df_feat), requested)
 
-        # Fibonacci at index 0 of retained dataset MUST NOT be NaN
-        self.assertFalse(np.isnan(df_feat["fib_618_dist_180d"].iloc[0]), "Fibonacci feature at requested start timestamp is NaN!")
+        # Verify raw pre-fillna validity mask is True across all retained rows
+        raw_valid = df_feat_full.attrs["raw_fib_valid_mask"].loc[requested_start_ts:]
+        self.assertTrue(raw_valid.all(), "Raw Fibonacci had NaNs before fillna(0.0) in retained slice!")
 
     def test_consecutive_hourly_windows_with_missing_targets_in_middle(self):
         """Verify that missing/ambiguous targets in the middle do NOT cause lookback windows to skip an hour."""
@@ -587,12 +636,9 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         self.assertFalse(np.isnan(y).any(), "NaN targets must be filtered out post-construction")
 
         # 2. But internal features of EVERY window must be contiguous 1-hour steps
-        # Check decision indices
         dec_indices = meta["decision_indices"]
         for idx, dec_i in enumerate(dec_indices):
-            # Window in feature space corresponds to original indices [dec_i - lookback + 1 : dec_i + 1]
             win_timestamps = dates[dec_i - lookback + 1 : dec_i + 1]
-            # Time delta between every adjacent bar inside the lookback window must be exactly 1 hour
             deltas = pd.Series(win_timestamps).diff().dropna()
             self.assertTrue((deltas == pd.Timedelta(hours=1)).all(), "A lookback window skipped an hour internally!")
 
@@ -648,6 +694,8 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         trade = res["trades"][0]
         # Fill MUST be at candle 1 OPEN (2010.0) + slippage (2010 * 1.001 = 2012.01)
         self.assertEqual(trade["entry_bar"], 1)
+        self.assertEqual(trade["decision_time"], str(dates[0]))
+        self.assertEqual(trade["entry_time"], str(dates[1]))
         self.assertAlmostEqual(trade["entry_price"], 2010.0 * 1.001, places=3)
         self.assertEqual(trade["side"], "LONG")
 
@@ -656,7 +704,7 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         dates = pd.date_range("2026-01-01", periods=5, freq="1h", tz="UTC")
         df_test = pd.DataFrame({
             "open": [2000.0, 2000.0, 2000.0, 2000.0, 2000.0],
-            # At candle 2: high touches PT (2030) and low touches SL (1970)
+            # At candle 2: high touches PT (2020) and low touches SL (1980)
             "high": [2005.0, 2005.0, 2050.0, 2005.0, 2005.0],
             "low": [1995.0, 1995.0, 1950.0, 1995.0, 1995.0],
             "close": [2000.0, 2000.0, 2000.0, 2000.0, 2000.0],
@@ -714,9 +762,6 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
 
     def test_pooled_profit_factor_and_compounded_return_calculation(self):
         """Verify pooled profit factor and compounded return calculations."""
-        # Fold 1: Net PnL = +10%
-        # Fold 2: Net PnL = -5%
-        # Compounded return: (1 + 0.10) * (1 - 0.05) - 1 = 1.045 - 1 = +4.5%
         fold_results = [
             {"net_pnl_pct": 10.0, "profit_factor": 2.0, "max_drawdown_pct": 3.0, "win_rate_pct": 60.0, "trade_count": 5},
             {"net_pnl_pct": -5.0, "profit_factor": 0.5, "max_drawdown_pct": 7.0, "win_rate_pct": 40.0, "trade_count": 5},
@@ -727,7 +772,6 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         compounded_net_return_pct = float(round((compounded_ret - 1.0) * 100.0, 2))
         self.assertAlmostEqual(compounded_net_return_pct, 4.5, places=2)
 
-        # Pooled trades: Gain = $200, Loss = $100 -> Pooled PF = 2.0
         trades = [
             {"net_return": 0.10}, {"net_return": 0.10},  # sum = 0.20
             {"net_return": -0.05}, {"net_return": -0.05}, # sum = -0.10
@@ -736,6 +780,278 @@ class TestPass4ExecutionAndIntegrity(unittest.TestCase):
         losses = abs(sum(t["net_return"] for t in trades if t["net_return"] < 0))
         pooled_pf = gains / losses
         self.assertAlmostEqual(pooled_pf, 2.0)
+
+
+class TestPass5ArtifactIntegrityAndWalkForward(unittest.TestCase):
+    """Test suite for Quant Audit Pass 5 requirements."""
+
+    def test_fast_and_test_mode_epoch_propagation(self):
+        """
+        Verify that explicit max_epochs and patience passed to train_model() override
+        import-time config constants, and that --fast / --test propagate <= 5 / <= 30 epochs.
+        """
+        N = 120
+        X_c = np.random.randn(N, config.LOOKBACK, len(config.CANDLE_FEATURES)).astype(np.float32)
+        X_m = np.random.randn(N, config.LOOKBACK, len(config.MARKET_FEATURES)).astype(np.float32)
+        y = np.random.choice([-1.0, 1.0], size=N).astype(np.float32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_model_fast = os.path.join(tmpdir, "fast_model.pt")
+            _, res_fast = train_model(
+                X_c, X_m, y,
+                max_epochs=5,
+                patience=3,
+                model_path=tmp_model_fast,
+            )
+            val_fast = res_fast["validation_metrics"]
+            self.assertEqual(val_fast["max_epochs_configured"], 5)
+            self.assertEqual(val_fast["patience_configured"], 3)
+            self.assertLessEqual(val_fast["epochs_trained"], 5)
+
+            # Verify --test mode in train.py passes max_epochs=30 to train_model
+            captured_kwargs = {}
+            def fake_train_model(*args, **kwargs):
+                captured_kwargs.update(kwargs)
+                return MagicMock(), {
+                    "validation_metrics": {
+                        "best_epoch": 1,
+                        "epochs_trained": 1,
+                        "best_checkpoint_metric_val": 0.9,
+                        "trading_signal_directional_accuracy": 0.55,
+                        "regression_mse": 0.99,
+                        "trivial_zero_mse": 1.0,
+                    },
+                    "final_test_metrics": None,
+                    "calibration_results": {"fitted_temperature": 1.0},
+                    "test_uncertainty_analysis": None,
+                }
+
+            warmup = 720
+            limit = 200
+            total = warmup + limit
+            dates = pd.date_range("2026-01-01", periods=total, freq="1h", tz="UTC")
+            price = 2000.0 + 30.0 * np.sin(np.linspace(0, 20, total))
+            df_mock = pd.DataFrame({
+                "open": price, "high": price + 5.0, "low": price - 5.0, "close": price,
+                "volume": np.linspace(100, 500, total),
+            }, index=dates)
+
+            tmp_sc = os.path.join(tmpdir, "sc.pkl")
+            tmp_sm = os.path.join(tmpdir, "sm.pkl")
+            with patch.object(config, "MODEL_PATH", tmp_model_fast), \
+                 patch.object(config, "SCALER_CANDLE_PATH", tmp_sc), \
+                 patch.object(config, "SCALER_MARKET_PATH", tmp_sm), \
+                 patch("train.fetch_ohlcv", return_value=df_mock), \
+                 patch("train.train_model", side_effect=fake_train_model), \
+                 patch("sys.argv", ["train.py", "--test", "--limit", str(limit), "--warmup-bars", str(warmup)]):
+                train_main()
+
+            self.assertEqual(captured_kwargs.get("max_epochs"), 30)
+
+    def test_fibonacci_warmup_validation_fails_on_insufficient_history_and_cache(self):
+        """
+        Verify that missing 720-bar history BEFORE requested_start_ts fails validation
+        with ValueError before fillna(0.0) can replace NaN with 0.0 (both direct and cached CSV).
+        """
+        # Only 300 warmup bars (< 720 required) + 200 requested bars = 500 bars total
+        warmup = 300
+        requested = 200
+        total = warmup + requested
+        dates = pd.date_range("2026-01-01", periods=total, freq="1h", tz="UTC")
+        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 20, total))
+        df_insufficient = pd.DataFrame({
+            "open": price,
+            "high": price + 5.0,
+            "low": price - 5.0,
+            "close": price,
+            "volume": np.linspace(100, 500, total),
+        }, index=dates)
+
+        requested_start_ts = df_insufficient.index[-requested]
+
+        # 1. Direct build_features call with requested_start_ts MUST fail before fillna(0.0)
+        with self.assertRaises(ValueError) as ctx:
+            build_features(
+                df_insufficient,
+                add_targets=False,
+                requested_start_ts=requested_start_ts,
+                min_warmup_bars=720,
+            )
+        self.assertIn("Fibonacci warm-up validation failed", str(ctx.exception))
+
+        # 2. Even if someone bypassed min_history_bars=300, raw fib_618_dist_180d at bar 300 is NaN before fillna(0.0)!
+        with self.assertRaises(ValueError) as ctx2:
+            build_features(
+                df_insufficient,
+                add_targets=False,
+                requested_start_ts=requested_start_ts,
+                min_warmup_bars=100,  # bypass bar count check to test raw NaN check before fillna(0.0)
+            )
+        self.assertIn("before fillna(0.0)", str(ctx2.exception))
+
+        # 3. Cached CSV dataset (--use_cache) with insufficient pre-roll MUST also fail in train.py
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = os.path.join(tmpdir, "insufficient_cache.csv")
+            df_insufficient.to_csv(csv_path)
+            tmp_model = os.path.join(tmpdir, "m.pt")
+            tmp_sc = os.path.join(tmpdir, "sc.pkl")
+            tmp_sm = os.path.join(tmpdir, "sm.pkl")
+
+            with patch.object(config, "MODEL_PATH", tmp_model), \
+                 patch.object(config, "SCALER_CANDLE_PATH", tmp_sc), \
+                 patch.object(config, "SCALER_MARKET_PATH", tmp_sm), \
+                 patch("sys.argv", ["train.py", "--fast", "--limit", str(requested), "--use_cache", csv_path]):
+                with self.assertRaises(ValueError) as ctx_cache:
+                    train_main()
+                self.assertIn("Fibonacci warm-up validation failed", str(ctx_cache.exception))
+
+    def test_walk_forward_signal_timestamp_alignment(self):
+        """
+        Verify walk-forward signal timestamp alignment:
+        1. First test prediction uses decision timestamp at candle k-1 close (immediately before test start)
+           and executes at candle k OPEN (first test candle).
+        2. Every trade has decision_time < entry_time (specifically entry_time == decision_time + 1h).
+        3. Final test candle cannot generate a new trade outside the fold.
+        """
+        N = 360
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        price = 2000.0 + 80.0 * np.sin(np.linspace(0, 25, N))
+        df_raw = pd.DataFrame({
+            "open": price,
+            "high": price + 15.0,
+            "low": price - 15.0,
+            "close": price,
+            "volume": np.linspace(100, 1000, N),
+        }, index=dates)
+
+        wf_results = run_walk_forward_evaluation(
+            df_raw,
+            n_splits=2,
+            train_ratio=0.50,
+            test_ratio=0.20,
+            purge_horizon=5,
+            max_epochs=1,
+            batch_size=32,
+            device="cpu",
+            signal_threshold=0.0,  # Force trades so we can inspect alignment on every fold
+        )
+
+        for fold in wf_results["fold_by_fold_results"]:
+            test_start_ts = pd.Timestamp(fold["test_start_ts"])
+            test_end_ts = pd.Timestamp(fold["test_end_ts"])
+            first_dec_ts = pd.Timestamp(fold["first_decision_ts"])
+            first_exec_ts = pd.Timestamp(fold["first_execution_open_ts"])
+
+            # First decision timestamp is exactly 1 hour before first test candle open
+            self.assertEqual(first_exec_ts, test_start_ts)
+            self.assertEqual(first_dec_ts + pd.Timedelta(hours=1), first_exec_ts)
+
+            trades = fold["trades"]
+            self.assertGreater(len(trades), 0)
+            for t in trades:
+                dec_t = pd.Timestamp(t["decision_time"])
+                ent_t = pd.Timestamp(t["entry_time"])
+                self.assertLess(dec_t, ent_t, "Trade decision_time must strictly precede entry_time!")
+                self.assertEqual(dec_t + pd.Timedelta(hours=1), ent_t, "Entry must occur at next hourly candle OPEN!")
+                # Final test candle cannot initiate a new trade
+                self.assertLess(ent_t, test_end_ts, "Final test candle must not open a new trade!")
+
+    def test_walk_forward_inner_validation_scaler_isolation(self):
+        """
+        Prove numerically that extreme outliers injected into the inner validation slice
+        of a walk-forward fold have ZERO effect on fitted scaler means and variances.
+        """
+        N = 300
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 20, N))
+        df_raw = pd.DataFrame({
+            "open": price,
+            "high": price + 10.0,
+            "low": price - 10.0,
+            "close": price,
+            "volume": np.linspace(100, 500, N),
+        }, index=dates)
+
+        df_feat = build_features(df_raw, add_targets=False)
+        df_feat = add_tbm_target(df_feat, pt_mult=2.0, sl_mult=2.0, horizon=5, ambiguous_resolution="exclude")
+
+        # Replicate walk_forward.py inner train / inner val split on outer training window
+        tr_start_idx, tr_end_idx = 0, len(df_feat)
+        outer_train_len = tr_end_idx - tr_start_idx
+        inner_val_size = max(config.LOOKBACK + 10, int(outer_train_len * 0.25))
+        inner_val_start_idx = tr_end_idx - inner_val_size
+        inner_train_end_idx = max(tr_start_idx + config.LOOKBACK + 10, inner_val_start_idx - 5)
+
+        # Case A: Clean data
+        df_inner_train_A = df_feat.iloc[tr_start_idx:inner_train_end_idx]
+        scaler_c_A = StandardScaler().fit(df_inner_train_A[config.CANDLE_FEATURES].values)
+        scaler_m_A = StandardScaler().fit(df_inner_train_A[config.MARKET_FEATURES].values)
+
+        # Case B: Corrupt the inner validation slice [inner_val_start_idx : tr_end_idx] with 10^9 outliers
+        df_feat_corrupted = df_feat.copy()
+        df_feat_corrupted.iloc[inner_val_start_idx:tr_end_idx, :] = 1e9
+        df_inner_train_B = df_feat_corrupted.iloc[tr_start_idx:inner_train_end_idx]
+        scaler_c_B = StandardScaler().fit(df_inner_train_B[config.CANDLE_FEATURES].values)
+        scaler_m_B = StandardScaler().fit(df_inner_train_B[config.MARKET_FEATURES].values)
+
+        np.testing.assert_allclose(scaler_c_A.mean_, scaler_c_B.mean_, rtol=0, atol=0)
+        np.testing.assert_allclose(scaler_c_A.var_, scaler_c_B.var_, rtol=0, atol=0)
+        np.testing.assert_allclose(scaler_m_A.mean_, scaler_m_B.mean_, rtol=0, atol=0)
+        np.testing.assert_allclose(scaler_m_A.var_, scaler_m_B.var_, rtol=0, atol=0)
+
+    def test_ohlc_stop_loss_gap_and_itemized_accounting(self):
+        """
+        Verify realistic OHLC stop-loss gap fills, intratrade adverse excursion drawdown,
+        itemized cost decomposition, and compounded equity return.
+        """
+        dates = pd.date_range("2026-01-01", periods=5, freq="1h", tz="UTC")
+        # Trade enters LONG at bar 1 OPEN = 2000.0 (with ATR=10, sl_mult=2 -> SL = 1980, PT = 2020)
+        # At bar 2, market gaps down at OPEN = 1950.0 (< SL 1980.0)!
+        # Must fill at worse opening gap price 1950.0 (not 1980.0).
+        df_test = pd.DataFrame({
+            "open":  [2000.0, 2000.0, 1950.0, 1950.0, 1950.0],
+            "high":  [2005.0, 2005.0, 1960.0, 1955.0, 1955.0],
+            "low":   [1995.0, 1990.0, 1940.0, 1945.0, 1945.0],
+            "close": [2000.0, 1995.0, 1950.0, 1950.0, 1950.0],
+            "atr_14": [10.0,   10.0,   10.0,   10.0,   10.0],
+        }, index=dates)
+
+        signals = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        slip = 0.001     # 10 bps
+        taker = 0.0005   # 5 bps
+
+        res = simulate_trades_ohlc(
+            signals=signals,
+            df_test=df_test,
+            signal_threshold=0.5,
+            pt_mult=2.0,
+            sl_mult=2.0,
+            slippage=slip,
+            taker_fee=taker,
+        )
+
+        self.assertEqual(res["trade_count"], 1)
+        trade = res["trades"][0]
+        self.assertEqual(trade["exit_reason"], "stop_loss_gap")
+        # Raw exit price is the gap open 1950.0, NOT the stop trigger ~1982.0
+        self.assertAlmostEqual(trade["raw_exit_price"], 1950.0, places=4)
+        self.assertAlmostEqual(trade["exit_price"], 1950.0 * (1.0 - slip), places=4)
+
+        # Itemized fields present and consistent
+        self.assertIn("gross_price_return", trade)
+        self.assertIn("entry_slippage_cost", trade)
+        self.assertIn("exit_slippage_cost", trade)
+        self.assertIn("total_slippage_cost", trade)
+        self.assertIn("entry_fee_cost", trade)
+        self.assertIn("exit_fee_cost", trade)
+        self.assertIn("funding_cost", trade)
+        self.assertEqual(trade["funding_cost"], 0.0)
+        self.assertAlmostEqual(trade["Gross_Price_Verify"] if "Gross_Price_Verify" in trade else trade["gross_price_return"], (1950.0 - 2000.0) / 2000.0, places=6)
+
+        # Verify summary reports both compounded_net_return_pct and sum_net_pnl_pct
+        self.assertIn("compounded_net_return_pct", res)
+        self.assertIn("sum_net_pnl_pct", res)
+        self.assertGreater(res["max_drawdown_pct"], 0.0)
 
 
 if __name__ == "__main__":

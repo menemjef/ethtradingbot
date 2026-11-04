@@ -2,6 +2,7 @@
 data/preprocessor.py — Feature engineering, normalization, and window construction.
 
 Provides:
+  - validate_fibonacci_warmup(): verifies 720-bar Fibonacci indicator warm-up before fillna(0.0)
   - build_features(): assembles the two feature branches from indicator DataFrame
   - fit_and_save_scalers(): fits StandardScalers and persists them with joblib
   - load_scalers(): loads persisted scalers from disk
@@ -38,21 +39,81 @@ logger = logging.getLogger(__name__)
 # Feature Assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
+def validate_fibonacci_warmup(
+    df_raw: pd.DataFrame,
+    df_indicators_pre_fillna: pd.DataFrame,
+    requested_start_ts: pd.Timestamp,
+    min_history_bars: int = 720,
+) -> Dict[str, Any]:
+    """
+    Validate that the 720-period Fibonacci indicator ('fib_618_dist_180d') has
+    sufficient valid historical observations BEFORE requested_start_ts and is
+    non-NaN BEFORE fillna(0.0) is applied.
+    """
+    if requested_start_ts not in df_raw.index:
+        raise ValueError(
+            f"requested_start_ts ({requested_start_ts}) not found in raw OHLCV index."
+        )
+
+    # 1. Verify at least min_history_bars (720) valid historical observations exist BEFORE requested_start_ts
+    df_prior = df_raw.loc[df_raw.index < requested_start_ts]
+    ohlc_cols = [c for c in ["open", "high", "low", "close"] if c in df_prior.columns]
+    valid_prior_bars = int(len(df_prior[ohlc_cols].dropna())) if ohlc_cols else int(len(df_prior))
+
+    if valid_prior_bars < min_history_bars:
+        raise ValueError(
+            f"Fibonacci warm-up validation failed: only {valid_prior_bars} valid historical "
+            f"observations exist before requested_start_ts ({requested_start_ts}); "
+            f"at least {min_history_bars} valid pre-roll bars are required."
+        )
+
+    # 2. Verify raw indicator validity BEFORE fillna(0.0)
+    if requested_start_ts not in df_indicators_pre_fillna.index:
+        raise ValueError(
+            f"requested_start_ts ({requested_start_ts}) was dropped during core indicator warm-up."
+        )
+
+    if "fib_618_dist_180d" not in df_indicators_pre_fillna.columns:
+        raise ValueError("Column 'fib_618_dist_180d' missing from indicator matrix before fillna.")
+
+    retained_fib_raw = df_indicators_pre_fillna.loc[requested_start_ts:, "fib_618_dist_180d"]
+    first_fib_raw = retained_fib_raw.iloc[0]
+    nan_count_retained = int(retained_fib_raw.isna().sum())
+
+    if pd.isna(first_fib_raw) or nan_count_retained > 0:
+        raise ValueError(
+            f"Fibonacci warm-up validation failed before fillna(0.0): "
+            f"fib_618_dist_180d at requested_start_ts ({requested_start_ts}) is {first_fib_raw} "
+            f"(retained slice has {nan_count_retained} raw NaNs)."
+        )
+
+    return {
+        "requested_start_ts": str(requested_start_ts),
+        "valid_prior_bars": valid_prior_bars,
+        "first_fib_raw": float(first_fib_raw),
+        "nan_count_retained_pre_fillna": nan_count_retained,
+    }
+
+
 def build_features(
     df: pd.DataFrame, 
     add_targets: bool = True,
     funding_df: pd.DataFrame = None,
     oi_df: pd.DataFrame = None,
     df_15m: pd.DataFrame = None,
-    df_4h: pd.DataFrame = None
+    df_4h: pd.DataFrame = None,
+    requested_start_ts: Optional[pd.Timestamp] = None,
+    min_warmup_bars: int = 720,
 ) -> pd.DataFrame:
     """
     1. Compute indicators on raw OHLCV DataFrame.
     2. Integrate External Data (Funding, OI).
     3. Integrate MTF Features (15m, 4h RSI).
     4. Optionally add regression target.
-    5. Drop NaN rows.
+    5. Validate 720-bar Fibonacci warm-up BEFORE fillna(0.0) if requested_start_ts is given.
+    6. Drop core NaN rows and fill remaining auxiliary NaNs.
     """
+    df_raw_input = df
     # 1. Standard Indicators
     df = compute_indicators(df)
     
@@ -68,6 +129,13 @@ def build_features(
             df = add_tbm_target(df, pt_mult=config.TBM_PT_MULT, sl_mult=config.TBM_SL_MULT, horizon=TARGET_HORIZON)
         else:
             df = add_target(df, horizon=TARGET_HORIZON)
+
+    # Record raw pre-fillna validity of 720-period Fibonacci before any missing-column fill or fillna(0.0)
+    raw_fib_valid_mask = (
+        df["fib_618_dist_180d"].replace([np.inf, -np.inf], np.nan).notna().copy()
+        if "fib_618_dist_180d" in df.columns
+        else pd.Series(False, index=df.index)
+    )
 
     # Columns we need
     required = CANDLE_FEATURES + MARKET_FEATURES
@@ -92,6 +160,16 @@ def build_features(
         "log_volume", "volume_ema_ratio"
     ]
     df = df.dropna(subset=[c for c in core_features if c in df.columns])
+
+    # Validate 720-bar Fibonacci warm-up BEFORE fillna(0.0) masks any NaNs
+    fib_warmup_info = None
+    if requested_start_ts is not None:
+        fib_warmup_info = validate_fibonacci_warmup(
+            df_raw=df_raw_input,
+            df_indicators_pre_fillna=df,
+            requested_start_ts=requested_start_ts,
+            min_history_bars=min_warmup_bars,
+        )
     
     # Fill remaining NaNs (External/MTF data gaps or failures in HMM/GARCH) with 0.0
     # Note: 0.0 effectively uses the mean of the StandardScaler for that feature
@@ -103,6 +181,10 @@ def build_features(
         logger.warning("Feature matrix still contains NaNs - forcing zeros.")
         df = df.fillna(0.0)
 
+    df.attrs["raw_fib_valid_mask"] = raw_fib_valid_mask.reindex(df.index, fill_value=False)
+    if fib_warmup_info is not None:
+        df.attrs["fib_warmup_validation"] = fib_warmup_info
+
     logger.info("Feature matrix prepared. Final shape: %s", df.shape)
     return df
 
@@ -111,7 +193,11 @@ def build_features(
 # Scalers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fit_and_save_scalers(df: pd.DataFrame) -> tuple[StandardScaler, StandardScaler]:
+def fit_and_save_scalers(
+    df: pd.DataFrame,
+    scaler_candle_path: Optional[str] = None,
+    scaler_market_path: Optional[str] = None,
+) -> tuple[StandardScaler, StandardScaler]:
     """
     Fit one StandardScaler per branch on training data and persist to disk.
     Returns (scaler_candle, scaler_market).
@@ -122,10 +208,13 @@ def fit_and_save_scalers(df: pd.DataFrame) -> tuple[StandardScaler, StandardScal
     scaler_candle.fit(df[CANDLE_FEATURES].values)
     scaler_market.fit(df[MARKET_FEATURES].values)
 
-    joblib.dump(scaler_candle, config.SCALER_CANDLE_PATH)
-    joblib.dump(scaler_market, config.SCALER_MARKET_PATH)
+    c_path = scaler_candle_path if scaler_candle_path is not None else config.SCALER_CANDLE_PATH
+    m_path = scaler_market_path if scaler_market_path is not None else config.SCALER_MARKET_PATH
 
-    logger.info("Scalers saved -> %s, %s", config.SCALER_CANDLE_PATH, config.SCALER_MARKET_PATH)
+    joblib.dump(scaler_candle, c_path)
+    joblib.dump(scaler_market, m_path)
+
+    logger.info("Scalers saved -> %s, %s", c_path, m_path)
     return scaler_candle, scaler_market
 
 

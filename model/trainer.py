@@ -190,6 +190,9 @@ def train_model(
     test_ratio: float = 0.20,
     purge_horizon: int = TARGET_HORIZON,
     purge_bars: Optional[int] = None,
+    max_epochs: Optional[int] = None,
+    patience: Optional[int] = None,
+    model_path: Optional[str] = None,
 ) -> Tuple[HybridModel, Dict[str, Any]]:
     """
     Production-integrated training pipeline with:
@@ -203,9 +206,13 @@ def train_model(
     if purge_bars is not None:
         purge_horizon = purge_bars
 
+    epochs_to_run = max_epochs if max_epochs is not None else config.MAX_EPOCHS
+    patience_limit = patience if patience is not None else config.PATIENCE
+    checkpoint_file = model_path if model_path is not None else config.MODEL_PATH
+
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info("Training on device: %s", device)
+    logger.info("Training on device: %s | Max Epochs: %d | Patience: %d", device, epochs_to_run, patience_limit)
 
     # ── 1. Chronological Partitioning with Temporal Purging ───────────────
     if use_three_way_split:
@@ -264,7 +271,7 @@ def train_model(
     # ── 2. Model, Optimizer, Loss ──────────────────────────────────────────
     model = HybridModel().to(device)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
-    scheduler = CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=1e-6)
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs_to_run, eta_min=1e-6)
 
     mse_criterion = nn.MSELoss()
     pos_weight_tensor = torch.tensor([pos_weight_val], device=device, dtype=torch.float32)
@@ -274,8 +281,10 @@ def train_model(
     best_eval_metric = float("inf") if "loss" in checkpoint_metric or "mse" in checkpoint_metric else float("-inf")
     best_epoch = 0
     patience_counter = 0
+    epochs_trained = 0
 
-    for epoch in range(1, MAX_EPOCHS + 1):
+    for epoch in range(1, epochs_to_run + 1):
+        epochs_trained = epoch
         t0 = time.time()
         model.train()
         train_losses = []
@@ -353,7 +362,7 @@ def train_model(
 
         logger.info(
             "Epoch %3d/%d | Train Loss: %.4f | Val MSE: %.4f | Val BCE: %.4f | Reg Acc: %.2f%% | Clf Acc: %.2f%% | LR: %.2e (%.1fs)",
-            epoch, MAX_EPOCHS, train_loss, val_loss_mse, val_loss_bce, reg_acc_epoch * 100, clf_acc_epoch * 100,
+            epoch, epochs_to_run, train_loss, val_loss_mse, val_loss_bce, reg_acc_epoch * 100, clf_acc_epoch * 100,
             optimizer.param_groups[0]["lr"], elapsed,
         )
 
@@ -373,19 +382,19 @@ def train_model(
         if is_better:
             best_eval_metric = current_metric
             best_epoch = epoch
-            torch.save(model.state_dict(), config.MODEL_PATH)
+            torch.save(model.state_dict(), checkpoint_file)
             patience_counter = 0
             logger.info("  [BEST] Model saved (Criterion: %s = %.4f | Epoch: %d)",
                         checkpoint_metric, best_eval_metric, best_epoch)
         else:
             patience_counter += 1
-            if patience_counter >= PATIENCE:
-                logger.info("Early stopping at epoch %d (patience=%d exhausted)", epoch, PATIENCE)
+            if patience_counter >= patience_limit:
+                logger.info("Early stopping at epoch %d (patience=%d exhausted)", epoch, patience_limit)
                 break
 
     # ── 4. Restore Best Checkpoint ─────────────────────────────────────────
-    if os.path.exists(config.MODEL_PATH):
-        model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
+    if os.path.exists(checkpoint_file):
+        model.load_state_dict(torch.load(checkpoint_file, map_location=device))
     logger.info("Restored best model from epoch %d (%s: %.4f)", best_epoch, checkpoint_metric, best_eval_metric)
 
     # ── 5. Validation Evaluation on Best Model ────────────────────────────
@@ -410,6 +419,9 @@ def train_model(
         target_multiplier=TARGET_MULTIPLIER,
     )
     val_metrics["best_epoch"] = best_epoch
+    val_metrics["epochs_trained"] = epochs_trained
+    val_metrics["max_epochs_configured"] = epochs_to_run
+    val_metrics["patience_configured"] = patience_limit
     val_metrics["checkpoint_metric"] = checkpoint_metric
     val_metrics["best_checkpoint_metric_val"] = best_eval_metric
     val_metrics["split_metadata"] = split_meta

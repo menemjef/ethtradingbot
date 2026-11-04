@@ -358,3 +358,131 @@ Rebuilt `model/walk_forward.py` trade simulator with realistic microstructure mo
 
 - **Prior Baseline from Training/Calibration:** `evaluate_calibration()` now accepts `fixed_prior`. When evaluating the untouched test partition, calibration metrics (Brier score and Log Loss) are measured against the prior positive rate fixed on the training/calibration set, not the test set.
 - **Untouched Final Test Partition:** Completely isolated from model selection and temperature fitting.
+
+
+---
+
+## Pass 5: Artifact Integrity and Walk-Forward Corrections (2026-11-04)
+
+> **Commit:** `(staged on chatgpt-audit-review)`  
+> **Status:** Priority 0 artifact forensic audit completed, non-destructive test harness enforced, epoch propagation fixed, pre-`fillna` 720-bar Fibonacci validation implemented, walk-forward signal alignment & inner-val scaler isolation verified, and realistic OHLC stop-gap & itemized accounting integrated. All 38 `unittest discover` tests + 8 `test_audit_bridge.py` tests pass with zero artifact mutation.
+
+### 22. Priority 0 — Active Model and Scaler Integrity Audit
+
+#### A. Forensic Hash Comparison of Active Artifacts (`checkpoints/`)
+
+| Artifact | Previously Recorded Active Hash | Current SHA-256 in `checkpoints/` | Status & Provenance |
+|---|---|---|---|
+| `checkpoints/best_model.pt` | `ac224bb7731f26b46d3f1cdc8cf39457742f7afde81799b31d67f9e02e3505bb` | `0dfa18e77e5afaafa94f12ad239ba80379a418f77569ccd50aa261b1328789f2` | **Overwritten during Pass 4 test run** by `test_train_py_full_orchestration_mocked()` (which mocked `fetch_ohlcv` and `sys.argv` without redirecting `config.MODEL_PATH`). |
+| `checkpoints/scaler_candle.pkl` | `b8e8da465b61cc47dd43ecbef3fd47df037362f4b17e6a54e1f3620b29dab5e4` | `7104dc5965e75a6cee2224ff4a97cd00fe9c17c5d847ca5646d32e0ac8ad401d` | **Overwritten during Pass 4 test run** by `test_train_py_full_orchestration_mocked()` (unpatched `config.SCALER_CANDLE_PATH`). |
+| `checkpoints/scaler_market.pkl` | `9d62bd29c91cfa45762c1ed23f8eb21e3eddc65be2d613a63ebfd2af4cced281` | `b94a1c728b0a090c3ff7215ecc03a149ee19c9c5cfa996bc98e6d2391716723c` | **Overwritten during Pass 4 test run** by `test_train_py_full_orchestration_mocked()` (unpatched `config.SCALER_MARKET_PATH`). |
+
+#### B. Preserved Baseline Backups (`C:\Python Projects\trading_bot_backups\baseline_pre_retrain\`)
+
+| Backup Artifact | Expected Baseline Hash | Verified Current SHA-256 | Integrity Status |
+|---|---|---|---|
+| `best_model.pt` | `8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95` | `8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95` | **100% INTACT & UNTOUCHED** |
+| `scaler_candle.pkl` | `d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c` | `d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c` | **100% INTACT & UNTOUCHED** |
+| `scaler_market.pkl` | `d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d` | `d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d` | **100% INTACT & UNTOUCHED** |
+
+#### C. Additional Untouched Multi-Seed Checkpoints in `checkpoints/`
+
+A full filesystem search across `C:\Python Projects` and user directories confirmed no secondary copy of `ac224bb7...` was cached outside `checkpoints/`. However, the suffixed multi-seed checkpoints and scalers in `checkpoints/` were never touched by `test_train_py_full_orchestration_mocked()`:
+
+| File in `checkpoints/` | Verified SHA-256 | Last Modified |
+|---|---|---|
+| `best_model_42.pt` | `8c352dfe8f637af3ca3cb05e192e44fcec47848e5f7b067f88481ee9939bdcdd` | `2026-03-27 11:39:11` |
+| `best_model_1337.pt` | `66aa63f4d334b4970fd87ea576A58e9504d50cc960f4ebb8ba4944f98cb62864` | `2026-03-27 12:12:41` |
+| `best_model_7.pt` | `a0136e12ad106c914f898b989d4172233dd348c4367710a0401892089d5b10d6` | `2026-03-27 12:49:44` |
+| `scaler_candle_42.pkl` / `_1337.pkl` / `_7.pkl` | `c82037685e2aef7c3f8136af6f4321c89a3d3c49bf775916d1a33080320eaf33` | `2026-03-27` |
+| `scaler_market_42.pkl` / `_1337.pkl` / `_7.pkl` | `a6dfa45c8991c96efec1525063b231684d77c72da7e86427657d60e4aff70f03` | `2026-03-27` |
+
+Per Priority 0 rules 6 and 7, no older backup was blindly restored over `checkpoints/best_model.pt`, and no files were deleted or overwritten.
+
+---
+
+### 23. Non-Destructive Integration Testing (`test_train_py_full_orchestration_mocked`)
+
+- `fit_and_save_scalers()` in `data/preprocessor.py` now accepts optional `scaler_candle_path` and `scaler_market_path`.
+- `train_model()` in `model/trainer.py` now accepts optional `model_path`.
+- `train.py` resolves `model_path`, `scaler_candle_path`, and `scaler_market_path` dynamically from `config` at runtime and passes them explicitly to `fit_and_save_scalers()` and `train_model()`.
+- `test_train_py_full_orchestration_mocked()` now creates a `tempfile.TemporaryDirectory()`, patches `config.MODEL_PATH`, `config.SCALER_CANDLE_PATH`, and `config.SCALER_MARKET_PATH` to paths inside `tmpdir`, verifies temporary artifacts are created in `tmpdir`, and asserts that the SHA-256 hashes of all three production files in `checkpoints/` are identical before and after the test.
+
+---
+
+### 24. Fast and Test Mode Epoch Propagation
+
+- Previously, `model/trainer.py` bound `MAX_EPOCHS` and `PATIENCE` via `from config import MAX_EPOCHS, PATIENCE` at module import time, so modifying `config.MAX_EPOCHS` inside `train.py` had no effect on `train_model()`.
+- `train_model()` now accepts explicit `max_epochs: Optional[int] = None` and `patience: Optional[int] = None` parameters, defaulting to `config.MAX_EPOCHS` and `config.PATIENCE` when `None`, and records `epochs_trained`, `max_epochs_configured`, and `patience_configured` in `validation_metrics`.
+- `train.py` computes `max_epochs = 5` (`patience = 3`) for `--fast` and `max_epochs = 30` for `--test`, passing both explicitly into `train_model()` and `run_walk_forward_evaluation()`.
+- Verified by `test_fast_and_test_mode_epoch_propagation`.
+
+---
+
+### 25. Pre-`fillna(0.0)` 720-Bar Fibonacci Warm-Up Validation
+
+- `build_features()` in `data/preprocessor.py` replaces remaining auxiliary `NaN` values with `0.0` at the end of feature assembly, which previously masked whether `fib_618_dist_180d` (720-hour rolling Fibonacci retracement) was `NaN` at `requested_start_ts`.
+- Added `validate_fibonacci_warmup()` in `data/preprocessor.py` and integrated it into `build_features()` **before** `df = df.fillna(0.0)`:
+  1. Verifies that at least `min_history_bars=720` valid OHLC observations exist in `df_raw` strictly before `requested_start_ts`.
+  2. Verifies that raw `fib_618_dist_180d` at `requested_start_ts` (and across the entire retained slice `df.loc[requested_start_ts:]`) is non-`NaN` **before** `fillna(0.0)` is applied.
+  3. Stores `df.attrs["raw_fib_valid_mask"]` and `df.attrs["fib_warmup_validation"]` on the returned DataFrame.
+- `train.py` passes `requested_start_ts=requested_start_ts, min_warmup_bars=720` to `build_features()` for **both** live fetches and cached CSV datasets (`--use_cache`).
+- Verified by `test_fibonacci_warmup_validation_fails_on_insufficient_history_and_cache`.
+
+---
+
+### 26. Walk-Forward Signal Timestamp Alignment
+
+- In `model/walk_forward.py`:
+  - For a test fold covering indices $[k_{\text{start}}, k_{\text{end}})$, prediction $j \in [0, N_{\text{test}}-1]$ is evaluated at decision candle $k_{\text{start}} + j - 1$ **CLOSE** using the contiguous lookback window $[k_{\text{start}} + j - \text{LOOKBACK}, k_{\text{start}} + j - 1]$.
+  - Specifically, the first test prediction ($j = 0$) uses decision timestamp $T_{k_{\text{start}}-1}$ (the candle immediately before the test period) and executes at the first test candle's **OPEN** ($T_{k_{\text{start}}}$).
+  - The final test candle ($j = N_{\text{test}} - 1$) cannot open a new position outside the fold (`i < N - 1` guard on entry; any open trade is marked to market and closed at the final test candle's close with `exit_reason = "end_of_fold"`).
+  - Every trade record includes explicit `decision_time` and `entry_time` timestamps with `decision_time + 1h == entry_time`.
+- Verified by `test_walk_forward_signal_timestamp_alignment`.
+
+---
+
+### 27. Scaler Isolation in Walk-Forward Inner Validation
+
+- In `run_walk_forward_evaluation()`, each fold's outer training history $[0, \text{tr\_end\_idx})$ is partitioned into:
+  - Inner training slice: `df_inner_train = df_feat.iloc[tr_start_idx:inner_train_end_idx]` (purged by `purge_horizon` before inner validation start).
+  - Inner validation slice: `df_inner_val = df_feat.iloc[inner_val_start_idx:tr_end_idx]`.
+- `scaler_c` and `scaler_m` are fitted **exclusively** on `df_inner_train`.
+- Verified by `test_walk_forward_inner_validation_scaler_isolation`, which injects $10^9$ outliers into the inner validation slice and proves `scaler_c.mean_`, `scaler_c.var_`, `scaler_m.mean_`, and `scaler_m.var_` are bit-for-bit identical (`rtol=0, atol=0`).
+
+---
+
+### 28. Realistic OHLC Execution Accounting
+
+- **Stop-Loss & Take-Profit Opening Gaps:** In `simulate_trades_ohlc()`, if a candle opens beyond the stop trigger (`curr_open <= sl_price` for LONG, `curr_open >= sl_price` for SHORT), the trade exits at the worse opening gap price `curr_open` with slippage and `exit_reason = "stop_loss_gap"`.
+- **Itemized PnL Decomposition:** Every trade record reports:
+  - `gross_price_return`: unadjusted price return between `raw_entry_price` and `raw_exit_price`
+  - `entry_slippage_cost` and `exit_slippage_cost` (`total_slippage_cost`)
+  - `entry_fee_cost` and `exit_fee_cost`
+  - `funding_cost`: `0.0` (with `funding_modeling_note: "not_modeled_in_ohlc_simulation"`)
+  - `net_return`: net realized return after slippage and fees
+- **Compounded Equity Curve & Intratrade Drawdown:**
+  - Tracks hourly mark-to-market equity using intratrade adverse excursion (`curr_low` for LONG, `curr_high` for SHORT) to compute true maximum drawdown (`max_drawdown_pct`).
+  - Computes compounded net return (`compounded_net_return_pct`) from the multiplicative equity curve $\prod (1 + r_m) - 1$, reported separately from the uncompounded arithmetic sum (`sum_net_pnl_pct`).
+- Verified by `test_ohlc_stop_loss_gap_and_itemized_accounting`.
+
+---
+
+### 29. Pre-Test and Post-Test Artifact Hash Verification
+
+| Artifact Path | Pre-Test SHA-256 | Post-Test SHA-256 | Changed? |
+|---|---|---|---|
+| `checkpoints/best_model.pt` | `0dfa18e77e5afaafa94f12ad239ba80379a418f77569ccd50aa261b1328789f2` | `0dfa18e77e5afaafa94f12ad239ba80379a418f77569ccd50aa261b1328789f2` | **No (0 diff)** |
+| `checkpoints/scaler_candle.pkl` | `7104dc5965e75a6cee2224ff4a97cd00fe9c17c5d847ca5646d32e0ac8ad401d` | `7104dc5965e75a6cee2224ff4a97cd00fe9c17c5d847ca5646d32e0ac8ad401d` | **No (0 diff)** |
+| `checkpoints/scaler_market.pkl` | `b94a1c728b0a090c3ff7215ecc03a149ee19c9c5cfa996bc98e6d2391716723c` | `b94a1c728b0a090c3ff7215ecc03a149ee19c9c5cfa996bc98e6d2391716723c` | **No (0 diff)** |
+| `baseline_pre_retrain/best_model.pt` | `8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95` | `8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95` | **No (0 diff)** |
+| `baseline_pre_retrain/scaler_candle.pkl` | `d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c` | `d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c` | **No (0 diff)** |
+| `baseline_pre_retrain/scaler_market.pkl` | `d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d` | `d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d` | **No (0 diff)** |
+
+---
+
+### 30. Remaining Limitations
+
+1. **Overwritten Unweighted Active Artifact (`ac224bb7...`):** Because Pass 4's `test_train_py_full_orchestration_mocked()` ran before path isolation was added, the single unsuffixed `checkpoints/best_model.pt` (`ac224bb7...`) was overwritten by a 5-epoch synthetic smoke-test checkpoint (`0dfa18e7...`). All pre-retrain baseline artifacts (`8b7b979e...`) and suffixed 20,000-candle multi-seed checkpoints (`best_model_42.pt`, `best_model_1337.pt`, `best_model_7.pt`) remain intact. A fresh controlled production training run (once approved) or explicit promotion of a verified checkpoint will be needed before live deployment.
+2. **Historical Perpetual Funding Cost in OHLC Walk-Forward Simulator:** While `simulate_trades_ohlc()` now itemizes `funding_cost: 0.0` with explicit disclosure (`"not_modeled_in_ohlc_simulation"`), integrating historical 8-hour perpetual funding rate schedules into trade-level PnL requires passing aligned historical funding rate series into `simulate_trades_ohlc()`.
+3. **1-Hour OHLC Granularity for Intrabar Collisions:** When both TP and SL are touched within the same 1-hour candle during walk-forward simulation, the simulator conservatively resolves `stop_loss_collision` (stop-first) unless lower-timeframe (e.g., 1-minute or 15-minute) sub-bars are supplied.

@@ -1,15 +1,14 @@
 """
 model/walk_forward.py — Walk-Forward Cross-Validation Engine with OHLC-Aware Simulation.
 
-Executes rigorous out-of-sample walk-forward validation:
-1. Clear chronological boundaries: all training targets resolve before the first out-of-sample prediction.
-2. Scalers fitted strictly on each fold's historical training slice.
-3. Preceding historical bars used as continuous lookback context for out-of-sample test windows.
-4. Inner chronological validation partition for early stopping and checkpoint selection.
-5. Next-bar Open execution with modeled slippage and explicit maker/taker fee accounting.
-6. Intrabar High/Low barrier checks with conservative stop-first collision resolution.
-7. Forced mark-to-market and closure of end-of-fold open positions.
-8. Pooled profit factor and sequential compounded return aggregation.
+Pass 5 Corrections:
+1. Signal alignment: First test prediction evaluates at candle k-1 close, executes at candle k OPEN.
+   Final test candle cannot generate trades outside fold. Every trade records decision_time and entry_time.
+2. Scaler isolation: Scalers fit strictly on inner training partition, zero leakage from inner val.
+3. Realistic OHLC execution: Stop-loss gaps filled at market open (worse price), not trigger price.
+4. Intratrade adverse excursion: Tracks hourly mark-to-market equity for true maximum drawdown.
+5. Itemized accounting: Separate gross price return, entry slippage, exit slippage, entry fee, exit fee, and funding.
+6. Pooled profit factor and compounded net return across folds.
 """
 
 import logging
@@ -52,6 +51,7 @@ logger = logging.getLogger(__name__)
 def simulate_trades_ohlc(
     signals: np.ndarray,
     df_test: pd.DataFrame,
+    decision_timestamps: Optional[List[Any]] = None,
     signal_threshold: float = SIGNAL_THRESHOLD,
     pt_mult: float = TBM_PT_MULT,
     sl_mult: float = TBM_SL_MULT,
@@ -62,176 +62,283 @@ def simulate_trades_ohlc(
 ) -> Dict[str, Any]:
     """
     OHLC-aware barrier trade simulation:
-    - Signal is observed at candle close of bar i.
-    - Entry order executes at bar i + 1 OPEN with modeled slippage.
+    - Signal at index i has an explicit decision timestamp (candle close of bar i - 1 or preceding candle).
+    - Entry order executes at candle i OPEN with modeled slippage.
+    - If candle i opens beyond the stop level (stop-loss gap), fills at candle i OPEN (worse price).
     - Intrabar TP/SL evaluated against subsequent candle High and Low.
     - If both TP and SL are touched in the same candle: resolves conservatively STOP-FIRST.
     - Time-horizon exit at candle close of bar (entry_bar + holding_max).
     - Forced end-of-fold close: any remaining open position at the final test bar
       is marked to market and closed at final candle CLOSE.
-    - Itemized tracking of gross PnL, fees, slippage, and net PnL.
+    - Intratrade adverse excursion tracked on hourly bars for true maximum drawdown.
+    - Itemized tracking of gross price PnL, slippage, entry/exit fees, funding, and net PnL.
     """
-    N = len(signals)
-    assert len(df_test) >= N, f"df_test length ({len(df_test)}) must cover signals length ({N})"
+    N = len(df_test)
+    assert len(signals) == N, f"signals length ({len(signals)}) must match df_test length ({N})"
 
-    # Align arrays with signals
-    opens = df_test["open"].values[:N]
-    highs = df_test["high"].values[:N]
-    lows = df_test["low"].values[:N]
-    closes = df_test["close"].values[:N]
-    atrs = df_test["atr_14"].values[:N] if "atr_14" in df_test else np.full(N, 10.0)
-    timestamps = df_test.index[:N]
+    opens = df_test["open"].values
+    highs = df_test["high"].values
+    lows = df_test["low"].values
+    closes = df_test["close"].values
+    atrs = df_test["atr_14"].values if "atr_14" in df_test else np.full(N, 10.0)
+    timestamps = df_test.index
 
     trades = []
     in_pos = False
     side = 0
     entry_price = 0.0
+    raw_entry_price = 0.0
     entry_bar = 0
     entry_time = None
+    dec_time = None
     pt_price = 0.0
     sl_price = 0.0
-    pending_signal = 0  # 1 for long, -1 for short
-    pending_signal_bar = -1
+    entry_slip_cost = 0.0
 
     trade_id = 0
+    # Hourly equity series for intratrade drawdown tracking
+    hourly_equity = [1.0]
+    current_equity = 1.0
 
     for i in range(N):
-        # 1. Execute pending entry from previous candle signal at current candle OPEN
-        if not in_pos and pending_signal != 0:
-            side = pending_signal
-            entry_bar = i
-            entry_time = timestamps[i]
-            current_open = opens[i]
+        curr_open = opens[i]
+        curr_high = highs[i]
+        curr_low = lows[i]
+        curr_close = closes[i]
+        curr_time = timestamps[i]
 
-            # Slippage on entry (market taker order)
-            if side == 1:
-                entry_price = current_open * (1.0 + slippage)
-                pt_price = entry_price + (pt_mult * atrs[pending_signal_bar])
-                sl_price = entry_price - (sl_mult * atrs[pending_signal_bar])
-            else:
-                entry_price = current_open * (1.0 - slippage)
-                pt_price = entry_price - (pt_mult * atrs[pending_signal_bar])
-                sl_price = entry_price + (sl_mult * atrs[pending_signal_bar])
+        if decision_timestamps is not None:
+            # Pre-aligned signals: signals[i] was decided at decision_timestamps[i] (candle i-1 close)
+            # and executes at candle i OPEN (for i < N - 1 so final test bar starts no new trade).
+            can_enter_this_bar = (not in_pos) and (i < N - 1)
+            sig = signals[i]
+            curr_dec_time = decision_timestamps[i]
+        else:
+            # Standalone df_test signals: signals[k] is decided at candle k CLOSE (timestamps[k])
+            # and executes at candle k+1 OPEN (timestamps[k+1]).
+            # Thus at bar i >= 1, we execute signals[i - 1] decided at timestamps[i - 1].
+            # signals[N - 1] (at the final test candle close) cannot open a trade outside the fold.
+            can_enter_this_bar = (not in_pos) and (i >= 1)
+            sig = signals[i - 1] if i >= 1 else 0.0
+            curr_dec_time = timestamps[i - 1] if i >= 1 else curr_time
 
-            in_pos = True
-            pending_signal = 0
-            pending_signal_bar = -1
+        # 1. Check entry at candle i OPEN if not in position
+        if can_enter_this_bar:
+            if sig >= signal_threshold:
+                side = 1
+                raw_entry_price = curr_open
+                entry_price = curr_open * (1.0 + slippage)
+                entry_slip_cost = slippage
+                entry_bar = i
+                entry_time = curr_time
+                dec_time = curr_dec_time
+                current_atr = atrs[i]
+                pt_price = entry_price + (pt_mult * current_atr)
+                sl_price = entry_price - (sl_mult * current_atr)
+                in_pos = True
+            elif sig <= -signal_threshold:
+                side = -1
+                raw_entry_price = curr_open
+                entry_price = curr_open * (1.0 - slippage)
+                entry_slip_cost = slippage
+                entry_bar = i
+                entry_time = curr_time
+                dec_time = curr_dec_time
+                current_atr = atrs[i]
+                pt_price = entry_price - (pt_mult * current_atr)
+                sl_price = entry_price + (sl_mult * current_atr)
+                in_pos = True
 
         # 2. Check position exits during candle i
         if in_pos:
             holding_bars = i - entry_bar
             exit_trade = False
             exit_price = 0.0
+            raw_exit_price = 0.0
+            exit_slip_cost = 0.0
             exit_reason = "horizon"
             exit_fee = taker_fee
             is_collision = False
 
             if side == 1:  # LONG
-                hit_sl = bool(lows[i] <= sl_price)
-                hit_tp = bool(highs[i] >= pt_price)
+                # Stop-loss opening gap: market opened below SL level
+                if curr_open <= sl_price:
+                    exit_trade = True
+                    raw_exit_price = curr_open
+                    exit_price = curr_open * (1.0 - slippage)  # Fills at opening gap price
+                    exit_slip_cost = slippage
+                    exit_reason = "stop_loss_gap"
+                    exit_fee = taker_fee
+                # Take-profit opening gap: market opened above PT level
+                elif curr_open >= pt_price:
+                    exit_trade = True
+                    raw_exit_price = curr_open
+                    exit_price = curr_open * (1.0 - slippage)
+                    exit_slip_cost = slippage
+                    exit_reason = "take_profit_gap"
+                    exit_fee = maker_fee
+                else:
+                    hit_sl = bool(curr_low <= sl_price)
+                    hit_tp = bool(curr_high >= pt_price)
 
-                if hit_sl and hit_tp:
-                    # Intrabar collision: Conservative STOP-FIRST resolution
-                    exit_trade = True
-                    exit_price = sl_price * (1.0 - slippage)
-                    exit_reason = "stop_loss_collision"
-                    exit_fee = taker_fee
-                    is_collision = True
-                elif hit_sl:
-                    exit_trade = True
-                    exit_price = sl_price * (1.0 - slippage)
-                    exit_reason = "stop_loss"
-                    exit_fee = taker_fee
-                elif hit_tp:
-                    exit_trade = True
-                    exit_price = pt_price * (1.0 - slippage)
-                    exit_reason = "take_profit"
-                    exit_fee = maker_fee  # Limit order fill at profit target
-                elif holding_bars >= holding_max:
-                    exit_trade = True
-                    exit_price = closes[i] * (1.0 - slippage)
-                    exit_reason = "horizon"
-                    exit_fee = taker_fee
+                    if hit_sl and hit_tp:
+                        # Intrabar collision: Conservative STOP-FIRST resolution
+                        exit_trade = True
+                        raw_exit_price = sl_price
+                        exit_price = sl_price * (1.0 - slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "stop_loss_collision"
+                        exit_fee = taker_fee
+                        is_collision = True
+                    elif hit_sl:
+                        exit_trade = True
+                        raw_exit_price = sl_price
+                        exit_price = sl_price * (1.0 - slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "stop_loss"
+                        exit_fee = taker_fee
+                    elif hit_tp:
+                        exit_trade = True
+                        raw_exit_price = pt_price
+                        exit_price = pt_price * (1.0 - slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "take_profit"
+                        exit_fee = maker_fee
+                    elif holding_bars >= holding_max:
+                        exit_trade = True
+                        raw_exit_price = curr_close
+                        exit_price = curr_close * (1.0 - slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "horizon"
+                        exit_fee = taker_fee
 
             elif side == -1:  # SHORT
-                hit_sl = bool(highs[i] >= sl_price)
-                hit_tp = bool(lows[i] <= pt_price)
-
-                if hit_sl and hit_tp:
-                    # Intrabar collision: Conservative STOP-FIRST resolution
+                # Stop-loss opening gap: market opened above SL level
+                if curr_open >= sl_price:
                     exit_trade = True
-                    exit_price = sl_price * (1.0 + slippage)
-                    exit_reason = "stop_loss_collision"
+                    raw_exit_price = curr_open
+                    exit_price = curr_open * (1.0 + slippage)
+                    exit_slip_cost = slippage
+                    exit_reason = "stop_loss_gap"
                     exit_fee = taker_fee
-                    is_collision = True
-                elif hit_sl:
+                # Take-profit opening gap: market opened below PT level
+                elif curr_open <= pt_price:
                     exit_trade = True
-                    exit_price = sl_price * (1.0 + slippage)
-                    exit_reason = "stop_loss"
-                    exit_fee = taker_fee
-                elif hit_tp:
-                    exit_trade = True
-                    exit_price = pt_price * (1.0 + slippage)
-                    exit_reason = "take_profit"
+                    raw_exit_price = curr_open
+                    exit_price = curr_open * (1.0 + slippage)
+                    exit_slip_cost = slippage
+                    exit_reason = "take_profit_gap"
                     exit_fee = maker_fee
-                elif holding_bars >= holding_max:
-                    exit_trade = True
-                    exit_price = closes[i] * (1.0 + slippage)
-                    exit_reason = "horizon"
-                    exit_fee = taker_fee
+                else:
+                    hit_sl = bool(curr_high >= sl_price)
+                    hit_tp = bool(curr_low <= pt_price)
 
-            # Forced end-of-fold close at final bar
+                    if hit_sl and hit_tp:
+                        # Intrabar collision: Conservative STOP-FIRST resolution
+                        exit_trade = True
+                        raw_exit_price = sl_price
+                        exit_price = sl_price * (1.0 + slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "stop_loss_collision"
+                        exit_fee = taker_fee
+                        is_collision = True
+                    elif hit_sl:
+                        exit_trade = True
+                        raw_exit_price = sl_price
+                        exit_price = sl_price * (1.0 + slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "stop_loss"
+                        exit_fee = taker_fee
+                    elif hit_tp:
+                        exit_trade = True
+                        raw_exit_price = pt_price
+                        exit_price = pt_price * (1.0 + slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "take_profit"
+                        exit_fee = maker_fee
+                    elif holding_bars >= holding_max:
+                        exit_trade = True
+                        raw_exit_price = curr_close
+                        exit_price = curr_close * (1.0 + slippage)
+                        exit_slip_cost = slippage
+                        exit_reason = "horizon"
+                        exit_fee = taker_fee
+
+            # Forced end-of-fold close at final test bar
             if not exit_trade and i == N - 1:
                 exit_trade = True
-                exit_price = closes[i] * (1.0 - slippage) if side == 1 else closes[i] * (1.0 + slippage)
+                raw_exit_price = curr_close
+                exit_price = curr_close * (1.0 - slippage) if side == 1 else curr_close * (1.0 + slippage)
+                exit_slip_cost = slippage
                 exit_reason = "end_of_fold"
                 exit_fee = taker_fee
 
             if exit_trade:
                 trade_id += 1
-                gross_ret = side * ((exit_price - entry_price) / entry_price)
-                total_fees = taker_fee + exit_fee
-                # Explicit fee and slippage breakdown
-                net_ret = gross_ret - total_fees
+                # Itemized PnL decomposition:
+                # 1. Gross price return
+                gross_price_ret = side * ((raw_exit_price - raw_entry_price) / raw_entry_price)
+                # 2. Total slippage cost
+                tot_slip = entry_slip_cost + exit_slip_cost
+                # 3. Fees
+                entry_f = taker_fee
+                exit_f = exit_fee
+                tot_fees = entry_f + exit_f
+                # 4. Funding cost (explicitly zero / excluded)
+                funding_f = 0.0
+
+                # 5. Net return
+                net_ret = float(side * ((exit_price - entry_price) / entry_price) - tot_fees)
 
                 trades.append({
                     "trade_id": trade_id,
+                    "decision_time": str(dec_time),
                     "entry_bar": entry_bar,
                     "entry_time": str(entry_time),
                     "exit_bar": i,
-                    "exit_time": str(timestamps[i]),
+                    "exit_time": str(curr_time),
                     "side": "LONG" if side == 1 else "SHORT",
+                    "raw_entry_price": float(raw_entry_price),
                     "entry_price": float(entry_price),
+                    "raw_exit_price": float(raw_exit_price),
                     "exit_price": float(exit_price),
                     "pt_price": float(pt_price),
                     "sl_price": float(sl_price),
                     "exit_reason": exit_reason,
                     "is_collision": is_collision,
                     "holding_bars": holding_bars,
-                    "gross_return": float(gross_ret),
-                    "fee_cost": float(total_fees),
-                    "slippage_cost": float(2.0 * slippage),
-                    "funding_cost": 0.0,  # Explicitly recorded: marked as excluding perpetual funding
+                    "gross_price_return": float(gross_price_ret),
+                    "entry_slippage_cost": float(entry_slip_cost),
+                    "exit_slippage_cost": float(exit_slip_cost),
+                    "total_slippage_cost": float(tot_slip),
+                    "entry_fee_cost": float(entry_f),
+                    "exit_fee_cost": float(exit_f),
+                    "funding_cost": float(funding_f),
+                    "funding_disclosure": "Excluded (historical funding rate data not attached)",
                     "net_return": float(net_ret),
                 })
-                in_pos = False
 
-        # 3. Check for new signal at close of candle i (if not currently in position)
-        if not in_pos and i < N - 1:
-            sig = signals[i]
-            if sig >= signal_threshold:
-                pending_signal = 1
-                pending_signal_bar = i
-            elif sig <= -signal_threshold:
-                pending_signal = -1
-                pending_signal_bar = i
+                # Update cumulative equity
+                current_equity *= (1.0 + net_ret)
+                hourly_equity.append(current_equity)
+                in_pos = False
+            else:
+                # Intratrade mark-to-market adverse excursion for drawdown tracking
+                if side == 1:
+                    worst_bar_ret = (curr_low - entry_price) / entry_price - taker_fee
+                else:
+                    worst_bar_ret = (entry_price - curr_high) / entry_price - taker_fee
+                hourly_equity.append(current_equity * (1.0 + worst_bar_ret))
+        else:
+            hourly_equity.append(current_equity)
 
     if not trades:
         return {
             "trade_count": 0,
             "win_rate": 0.0,
             "profit_factor": 0.0,
-            "total_net_pnl_pct": 0.0,
+            "compounded_net_return_pct": 0.0,
+            "sum_net_pnl_pct": 0.0,
             "max_drawdown_pct": 0.0,
             "trades": [],
         }
@@ -249,19 +356,23 @@ def simulate_trades_ohlc(
         profit_factor = 99.0 if gross_profit > 0 else 0.0
 
     win_rate = float(len(wins) / len(df_tr))
-    total_net_pnl = float(df_tr["net_return"].sum()) * 100.0
+    sum_net_pnl = float(df_tr["net_return"].sum()) * 100.0
 
-    # Drawdown calculation
-    equity_curve = (1.0 + df_tr["net_return"]).cumprod()
-    peak = equity_curve.cummax()
-    drawdowns = (peak - equity_curve) / peak
+    # Compounded net return across equity curve
+    compounded_ret_pct = (current_equity - 1.0) * 100.0
+
+    # Intratrade maximum drawdown calculation
+    eq_series = pd.Series(hourly_equity)
+    running_peak = eq_series.cummax()
+    drawdowns = (running_peak - eq_series) / running_peak
     max_dd = float(drawdowns.max()) if len(drawdowns) > 0 else 0.0
 
     return {
         "trade_count": len(df_tr),
         "win_rate": win_rate,
         "profit_factor": profit_factor,
-        "total_net_pnl_pct": total_net_pnl,
+        "compounded_net_return_pct": compounded_ret_pct,
+        "sum_net_pnl_pct": sum_net_pnl,
         "max_drawdown_pct": max_dd * 100.0,
         "trades": trades,
     }
@@ -285,10 +396,11 @@ def run_walk_forward_evaluation(
     Full end-to-end Walk-Forward Evaluation pipeline with:
     1. Continuous hourly feature preservation without row compression.
     2. Strict temporal purge boundary: all training labels resolve before test prediction starts.
-    3. Scalers fitted strictly on training partition available before test window.
-    4. Inner validation partition with early stopping (no blind 300 epochs).
-    5. OHLC-aware simulation with next-bar open fill, intrabar TP/SL, and stop-first collision resolution.
-    6. Pooled profit factor and sequential compounded return aggregation.
+    3. Scalers fitted strictly on INNER training partition (zero validation leakage).
+    4. Inner validation partition with early stopping.
+    5. Clean test signal alignment: prediction at candle k-1 close executes at candle k OPEN.
+    6. Realistic OHLC-aware simulation with stop-loss gaps and intratrade drawdown tracking.
+    7. Pooled profit factor and sequential compounded return aggregation.
     """
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -298,8 +410,8 @@ def run_walk_forward_evaluation(
     df_feat = build_features(df_raw, add_targets=False)
     df_feat = add_tbm_target(
         df_feat,
-        pt_mult=TBM_PT_MULT,
-        sl_mult=TBM_SL_MULT,
+        pt_mult=pt_mult,
+        sl_mult=sl_mult,
         horizon=purge_horizon,
         ambiguous_resolution="exclude",
     )
@@ -317,12 +429,11 @@ def run_walk_forward_evaluation(
         if te_start_idx >= N_total or (te_end_idx - te_start_idx) < purge_horizon + 10:
             break
 
-        # Boundary: Training target must fully resolve before the first test prediction timestamp
-        # Test starts at te_start_idx. Preceding purge_horizon bars are purged.
+        # 1. Outer Train and Test Boundaries:
+        # All training labels must resolve before the first out-of-sample prediction timestamp
         tr_end_idx = max(LOOKBACK + 50, te_start_idx - purge_horizon)
         tr_start_idx = 0
 
-        # Exact timestamps
         t_tr_start = df_feat.index[tr_start_idx]
         t_tr_end = df_feat.index[tr_end_idx - 1]
         t_tr_res_max = t_tr_end + pd.Timedelta(hours=purge_horizon)
@@ -333,56 +444,70 @@ def run_walk_forward_evaluation(
             f"Temporal leakage in fold {f_idx}: train label resolves at {t_tr_res_max} > test start {t_te_start}"
         )
 
-        logger.info(
-            "--- Fold %d/%d Boundaries ---", f_idx + 1, n_splits
-        )
-        logger.info("  Train Window: [%s -> %s] (%d bars)", t_tr_start, t_tr_end, tr_end_idx - tr_start_idx)
-        logger.info("  Purge Gap:    [%s -> %s] (%d bars)", t_tr_end, t_te_start, te_start_idx - tr_end_idx)
-        logger.info("  Test Window:  [%s -> %s] (%d bars)", t_te_start, t_te_end, te_end_idx - te_start_idx)
+        # 2. Define Inner Training and Inner Validation partitions within outer train history
+        outer_train_len = tr_end_idx - tr_start_idx
+        inner_val_size = int(outer_train_len * 0.25)
+        inner_tr_end_idx = max(LOOKBACK + 20, tr_end_idx - inner_val_size - purge_horizon)
+        inner_va_start_idx = tr_end_idx - inner_val_size
 
-        # 2. Fit Scalers STRICTLY on this fold's available historical training slice
-        df_train_history = df_feat.iloc[tr_start_idx:tr_end_idx]
+        df_inner_train = df_feat.iloc[tr_start_idx:inner_tr_end_idx]
+        df_inner_val = df_feat.iloc[inner_va_start_idx:tr_end_idx]
+
+        t_in_tr_end = df_inner_train.index[-1]
+        t_in_va_start = df_inner_val.index[0]
+        assert t_in_tr_end + pd.Timedelta(hours=purge_horizon) <= t_in_va_start, (
+            f"Inner purge leakage in fold {f_idx}: inner train label resolves after inner val start"
+        )
+
+        logger.info(
+            "--- Fold %d/%d Partition Hierarchy ---", f_idx + 1, n_splits
+        )
+        logger.info("  Inner Train (Fit Scalers Here): [%s -> %s] (%d bars)", df_inner_train.index[0], t_in_tr_end, len(df_inner_train))
+        logger.info("  Inner Val (Model Selection):   [%s -> %s] (%d bars)", t_in_va_start, df_inner_val.index[-1], len(df_inner_val))
+        logger.info("  Outer Test (Frozen Out-of-Sample): [%s -> %s] (%d bars)", t_te_start, t_te_end, te_end_idx - te_start_idx)
+
+        # 3. Fit Scalers EXCLUSIVELY on Inner Training History (Zero Validation Leakage)
         scaler_c = StandardScaler()
         scaler_m = StandardScaler()
-        scaler_c.fit(df_train_history[CANDLE_FEATURES].values)
-        scaler_m.fit(df_train_history[MARKET_FEATURES].values)
+        scaler_c.fit(df_inner_train[CANDLE_FEATURES].values)
+        scaler_m.fit(df_inner_train[MARKET_FEATURES].values)
 
-        # Transform train history
-        c_tr_full, m_tr_full = transform(df_train_history, scaler_c, scaler_m)
-        y_tr_full = df_train_history["target"].values.astype(np.float32)
+        # 4. Transform inner train and inner val using those frozen scalers
+        c_in_tr, m_in_tr = transform(df_inner_train, scaler_c, scaler_m)
+        y_in_tr = df_inner_train["target"].values.astype(np.float32)
 
-        # Build windows on continuous train history
-        Xc_tr_all, Xm_tr_all, y_tr_all, meta_tr = build_windows(
-            c_tr_full, m_tr_full, y_tr_full,
-            timestamps=df_train_history.index,
+        Xc_in_tr, Xm_in_tr, y_in_tr_win = build_windows(
+            c_in_tr, m_in_tr, y_in_tr,
             lookback=LOOKBACK,
             purge_horizon=purge_horizon,
             drop_nan_targets=True,
-            return_metadata=True,
+            return_metadata=False,
         )
 
-        # 3. Inner chronological validation partition for early stopping (75% train, 25% val with purge)
-        n_avail = len(y_tr_all)
-        inner_val_split = int(n_avail * 0.75)
-        inner_purge = purge_horizon
-        inner_tr_end = max(10, inner_val_split - inner_purge)
+        c_in_va, m_in_va = transform(df_inner_val, scaler_c, scaler_m)
+        y_in_va = df_inner_val["target"].values.astype(np.float32)
 
-        Xc_inner_tr, Xm_inner_tr, y_inner_tr = Xc_tr_all[:inner_tr_end], Xm_tr_all[:inner_tr_end], y_tr_all[:inner_tr_end]
-        Xc_inner_va, Xm_inner_va, y_inner_va = Xc_tr_all[inner_val_split:], Xm_tr_all[inner_val_split:], y_tr_all[inner_val_split:]
+        Xc_in_va, Xm_in_va, y_in_va_win = build_windows(
+            c_in_va, m_in_va, y_in_va,
+            lookback=LOOKBACK,
+            purge_horizon=purge_horizon,
+            drop_nan_targets=True,
+            return_metadata=False,
+        )
 
-        inner_train_ds = ETHDataset(Xc_inner_tr, Xm_inner_tr, y_inner_tr)
-        inner_val_ds = ETHDataset(Xc_inner_va, Xm_inner_va, y_inner_va)
+        inner_train_ds = ETHDataset(Xc_in_tr, Xm_in_tr, y_in_tr_win)
+        inner_val_ds = ETHDataset(Xc_in_va, Xm_in_va, y_in_va_win)
 
         train_loader = DataLoader(inner_train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
         val_loader = DataLoader(inner_val_ds, batch_size=batch_size, shuffle=False)
 
-        # 4. Train Model with Early Stopping
+        # 5. Train Model on Inner Train with Early Stopping on Inner Val
         model = HybridModel().to(device)
         optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-3)
         mse_loss = nn.MSELoss()
 
-        n_pos = int((y_inner_tr > 0).sum())
-        n_neg = int((y_inner_tr <= 0).sum())
+        n_pos = int((y_in_tr_win > 0).sum())
+        n_neg = int((y_in_tr_win <= 0).sum())
         pos_weight_val = float(n_neg / max(1, n_pos))
         bce_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val], device=device))
 
@@ -424,66 +549,63 @@ def run_walk_forward_evaluation(
             else:
                 patience_ctr += 1
                 if patience_ctr >= patience:
-                    logger.debug("Fold %d early stopping at epoch %d", f_idx + 1, ep)
                     break
 
         if best_state is not None:
             model.load_state_dict(best_state)
 
-        # 5. Out-of-Sample Test Window with Historical Lookback Context
-        # To evaluate test window [te_start_idx : te_end_idx], we include preceding LOOKBACK bars from history
-        context_start_idx = te_start_idx - LOOKBACK
-        df_test_with_context = df_feat.iloc[context_start_idx:te_end_idx]
+        # 6. Test Window Signal Alignment:
+        # The first test prediction is made at candle (te_start_idx - 1) CLOSE,
+        # using the preceding LOOKBACK historical candles ending at (te_start_idx - 1).
+        # Its execution occurs at candle te_start_idx OPEN.
+        # We need lookback context ending at candle te_end_idx - 2 (executing at te_end_idx - 1 OPEN).
+        # Slicing from (te_start_idx - LOOKBACK) to te_end_idx:
+        df_test_window = df_feat.iloc[te_start_idx:te_end_idx].copy()
+        N_test = len(df_test_window)
 
-        c_te_ctx, m_te_ctx = transform(df_test_with_context, scaler_c, scaler_m)
-        y_te_ctx = df_test_with_context["target"].values.astype(np.float32)
-
-        Xc_te, Xm_te, y_te, meta_te = build_windows(
-            c_te_ctx, m_te_ctx, y_te_ctx,
-            timestamps=df_test_with_context.index,
-            lookback=LOOKBACK,
-            purge_horizon=purge_horizon,
-            drop_nan_targets=False,  # Keep all test bars for sequential trade execution
-            return_metadata=True,
-        )
-
-        test_ds = ETHDataset(Xc_te, Xm_te, np.nan_to_num(y_te))
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+        # Build feature windows for the test predictions:
+        # For each candle j in [0 .. N_test - 1], its entry occurs at df_test_window.iloc[j] OPEN.
+        # The signal for that entry was generated at candle (te_start_idx + j - 1) CLOSE,
+        # using historical lookback bars ending at (te_start_idx + j - 1).
+        test_signals = np.zeros(N_test, dtype=np.float32)
+        dec_times = []
 
         model.eval()
-        test_reg_preds, test_clf_preds = [], []
         with torch.no_grad():
-            for xc, xm, _ in test_loader:
-                xc = xc.to(device)
-                xm = xm.to(device)
-                reg_out, clf_out = model(xc, xm)
-                test_reg_preds.extend(reg_out.squeeze(-1).cpu().numpy())
-                test_clf_preds.extend(clf_out.squeeze(-1).cpu().numpy())
+            for j in range(N_test):
+                dec_idx = te_start_idx + j - 1
+                dec_ts = df_feat.index[dec_idx]
+                dec_times.append(dec_ts)
 
-        reg_p = np.array(test_reg_preds, dtype=np.float32)
-        clf_p = np.array(test_clf_preds, dtype=np.float32)
+                # If j == N_test - 1: this is the final candle of the fold. It cannot generate an entry.
+                if j == N_test - 1:
+                    test_signals[j] = 0.0
+                    continue
 
-        # Directional accuracy evaluated only on bars with valid targets
-        valid_mask = ~np.isnan(y_te)
-        if valid_mask.sum() > 0:
-            reg_acc = directional_accuracy(reg_p[valid_mask], y_te[valid_mask])
-            clf_acc = directional_accuracy(clf_p[valid_mask], y_te[valid_mask])
-            mse_val = float(np.mean((reg_p[valid_mask] - y_te[valid_mask]) ** 2))
-            probs = 1.0 / (1.0 + np.exp(-np.clip(clf_p[valid_mask], -30.0, 30.0)))
-            cal_res = evaluate_calibration(probs, (y_te[valid_mask] > 0).astype(int))
-            brier_val = cal_res["brier_score"]
-            log_loss_val = cal_res["log_loss"]
+                # Lookback slice [dec_idx - LOOKBACK + 1 : dec_idx + 1] (length LOOKBACK)
+                ctx_df = df_feat.iloc[dec_idx - LOOKBACK + 1 : dec_idx + 1]
+                c_w, m_w = transform(ctx_df, scaler_c, scaler_m)
+                xc_t = torch.from_numpy(c_w).unsqueeze(0).to(device)
+                xm_t = torch.from_numpy(m_w).unsqueeze(0).to(device)
+
+                reg_p, _ = model(xc_t, xm_t)
+                pred_signal = float(reg_p.squeeze().cpu().item()) / TARGET_MULTIPLIER
+                test_signals[j] = pred_signal
+
+        # Directional accuracy on valid targets in test window
+        y_test_raw = df_test_window["target"].values.astype(np.float32)
+        valid_m = ~np.isnan(y_test_raw)
+        if valid_m.sum() > 0:
+            reg_acc = directional_accuracy(test_signals[valid_m], y_test_raw[valid_m])
+            mse_val = float(np.mean((test_signals[valid_m] - y_test_raw[valid_m]) ** 2))
         else:
-            reg_acc, clf_acc, mse_val, brier_val, log_loss_val = 0.5, 0.5, 1.0, 0.25, 0.693
+            reg_acc, mse_val = 0.5, 1.0
 
-        # 6. OHLC-Aware Trade Simulation
-        # df_test_slice corresponds to decision candles
-        df_test_slice = df_feat.iloc[te_start_idx:te_end_idx]
-        signals_sim = reg_p / TARGET_MULTIPLIER
-
+        # 7. OHLC-Aware Trade Simulation with Next-Bar Execution and Gap Accounting
         sim_res = simulate_trades_ohlc(
-            signals=signals_sim,
-            df_test=df_test_slice,
+            signals=test_signals,
+            df_test=df_test_window,
+            decision_timestamps=dec_times,
             signal_threshold=signal_threshold,
             pt_mult=pt_mult,
             sl_mult=sl_mult,
@@ -492,20 +614,22 @@ def run_walk_forward_evaluation(
 
         record = {
             "fold": f_idx,
-            "train_samples": len(y_inner_tr),
-            "val_samples": len(y_inner_va),
-            "test_samples": len(df_test_slice),
-            "train_timestamps": (str(t_tr_start), str(t_tr_end)),
+            "train_samples": len(y_in_tr_win),
+            "val_samples": len(y_in_va_win),
+            "test_samples": N_test,
+            "train_timestamps": (str(df_inner_train.index[0]), str(t_in_tr_end)),
             "test_timestamps": (str(t_te_start), str(t_te_end)),
+            "test_start_ts": str(t_te_start),
+            "test_end_ts": str(t_te_end),
+            "first_decision_ts": str(dec_times[0]) if len(dec_times) > 0 else None,
+            "first_execution_open_ts": str(df_test_window.index[0]) if len(df_test_window) > 0 else None,
             "directional_accuracy_reg_pct": float(round(reg_acc * 100, 2)),
-            "directional_accuracy_clf_pct": float(round(clf_acc * 100, 2)),
             "regression_mse": float(round(mse_val, 4)),
-            "brier_score": float(round(brier_val, 4)),
-            "log_loss": float(round(log_loss_val, 4)),
             "trade_count": sim_res["trade_count"],
             "win_rate_pct": float(round(sim_res["win_rate"] * 100, 2)),
             "profit_factor": float(round(sim_res["profit_factor"], 2)),
-            "net_pnl_pct": float(round(sim_res["total_net_pnl_pct"], 2)),
+            "compounded_net_return_pct": float(round(sim_res["compounded_net_return_pct"], 2)),
+            "sum_net_pnl_pct": float(round(sim_res["sum_net_pnl_pct"], 2)),
             "max_drawdown_pct": float(round(sim_res["max_drawdown_pct"], 2)),
             "trades": sim_res["trades"],
         }
@@ -513,14 +637,13 @@ def run_walk_forward_evaluation(
         all_trades.extend(sim_res["trades"])
 
         logger.info(
-            "Fold %d Result: DirAcc=%.2f%% | MSE=%.4f | Brier=%.4f | Trades=%d | WinRate=%.2f%% | PF=%.2f | NetPnL=%+.2f%% | MaxDD=%.2f%%",
+            "Fold %d Result: DirAcc=%.2f%% | MSE=%.4f | Trades=%d | WinRate=%.2f%% | PF=%.2f | NetReturn=%+.2f%% | MaxDD=%.2f%%",
             f_idx + 1, record["directional_accuracy_reg_pct"], record["regression_mse"],
-            record["brier_score"], record["trade_count"], record["win_rate_pct"],
-            record["profit_factor"], record["net_pnl_pct"], record["max_drawdown_pct"],
+            record["trade_count"], record["win_rate_pct"],
+            record["profit_factor"], record["compounded_net_return_pct"], record["max_drawdown_pct"],
         )
 
-    # 7. Multi-Fold Result Aggregation
-    # Pooled profit factor from aggregated trade ledgers
+    # 8. Pooled Profit Factor and Sequential Compounded Return
     if all_trades:
         pooled_df = pd.DataFrame(all_trades)
         wins = pooled_df[pooled_df["net_return"] > 0]
@@ -536,7 +659,7 @@ def run_walk_forward_evaluation(
     # Sequential Compounded Net Return across non-overlapping folds
     compounded_ret = 1.0
     for f in fold_results:
-        compounded_ret *= (1.0 + f["net_pnl_pct"] / 100.0)
+        compounded_ret *= (1.0 + f["compounded_net_return_pct"] / 100.0)
     compounded_net_return_pct = float(round((compounded_ret - 1.0) * 100.0, 2))
 
     trade_folds = [f for f in fold_results if f["trade_count"] > 0]
@@ -548,13 +671,12 @@ def run_walk_forward_evaluation(
         "mean_directional_accuracy_pct": float(np.mean([f["directional_accuracy_reg_pct"] for f in fold_results])),
         "std_directional_accuracy_pct": float(np.std([f["directional_accuracy_reg_pct"] for f in fold_results])),
         "mean_regression_mse": float(np.mean([f["regression_mse"] for f in fold_results])),
-        "mean_brier_score": float(np.mean([f["brier_score"] for f in fold_results])),
         "mean_win_rate_pct": mean_win_rate_pct,
         "pooled_win_rate_pct": pooled_win_rate,
         "pooled_profit_factor": pooled_pf,
         "mean_profit_factor": float(np.mean([f["profit_factor"] for f in fold_results])),
         "compounded_net_return_pct": compounded_net_return_pct,
-        "total_net_pnl_sum_pct": float(np.sum([f["net_pnl_pct"] for f in fold_results])),
+        "total_net_pnl_sum_pct": float(np.sum([f["sum_net_pnl_pct"] for f in fold_results])),
         "worst_max_drawdown_pct": worst_max_dd,
         "total_trades_all_folds": len(all_trades),
     }

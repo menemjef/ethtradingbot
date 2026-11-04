@@ -1,4 +1,3 @@
-import numpy as np
 """
 train.py — Full training pipeline entry point.
 
@@ -17,11 +16,14 @@ import io
 import os
 import sys
 import logging
+import numpy as np
+import pandas as pd
 from utils.logger import setup_logging
 from utils.seeding import set_seed
 setup_logging()
 set_seed(42)  # Ensure reproducibility across all runs
 
+import config
 from data.fetcher import fetch_ohlcv
 from data.preprocessor import (
     build_features,
@@ -141,35 +143,35 @@ def main():
 
     # Apply seed
     set_seed(args.seed)
-    
-    # Update paths if suffix is provided
-    import config
+
+    # Resolve artifact paths dynamically from config (allowing safe test patching & --suffix)
+    model_path = config.MODEL_PATH
+    scaler_candle_path = config.SCALER_CANDLE_PATH
+    scaler_market_path = config.SCALER_MARKET_PATH
     if args.suffix:
-        config.MODEL_PATH = config.MODEL_PATH.replace(".pt", f"_{args.suffix}.pt")
-        config.SCALER_CANDLE_PATH = config.SCALER_CANDLE_PATH.replace(".pkl", f"_{args.suffix}.pkl")
-        config.SCALER_MARKET_PATH = config.SCALER_MARKET_PATH.replace(".pkl", f"_{args.suffix}.pkl")
-    
-    # Re-import updated paths
-    from config import MODEL_PATH, SCALER_CANDLE_PATH, SCALER_MARKET_PATH
+        model_path = model_path.replace(".pt", f"_{args.suffix}.pt")
+        scaler_candle_path = scaler_candle_path.replace(".pkl", f"_{args.suffix}.pkl")
+        scaler_market_path = scaler_market_path.replace(".pkl", f"_{args.suffix}.pkl")
 
-    limit = 500 if args.fast else args.limit
+    limit = 500 if (args.fast and args.limit == FETCH_LIMIT) else args.limit
 
+    # Explicitly determine max_epochs and patience and pass them to train_model()
     if args.fast:
-        # Override epochs for smoke test
-        import config
-        config.MAX_EPOCHS = 5
-        config.PATIENCE = 3
-        logger.info("FAST MODE: capping at %d candles, 5 epochs", limit)
+        max_epochs = 5
+        patience = 3
+        logger.info("FAST MODE: capping at %d candles, %d epochs (patience=%d)", limit, max_epochs, patience)
     elif args.test:
-        import config
-        config.MAX_EPOCHS = 30
-        logger.info("TEST MODE: running for 30 epochs")
+        max_epochs = 30
+        patience = config.PATIENCE
+        logger.info("TEST MODE: running for %d epochs (patience=%d)", max_epochs, patience)
+    else:
+        max_epochs = config.MAX_EPOCHS
+        patience = config.PATIENCE
 
     # ── 1. Fetch data ────────────────────────────────────────────────────────
     # STEP 1: Download historical crypto candles (Open, High, Low, Close, Volume)
     logger.info("=" * 60)
     if args.use_cache and os.path.exists(args.use_cache):
-        import pandas as pd
         logger.info("Step 1/5 — Loading candles from local cache: %s", args.use_cache)
         df_raw = pd.read_csv(args.use_cache, index_col=0, parse_dates=True)
         if df_raw.index.tz is None:
@@ -189,7 +191,7 @@ def main():
                     f"Cache data integrity failure: Detected {len(missing)} missing intervals "
                     f"between {df_raw.index[0]} and {df_raw.index[-1]}"
                 )
-        if len(df_raw) > limit:
+        if len(df_raw) >= limit:
             requested_start_ts = df_raw.index[-limit]
         else:
             requested_start_ts = df_raw.index[0]
@@ -219,7 +221,7 @@ def main():
             train_ratio=0.50,
             test_ratio=0.125,
             purge_horizon=TARGET_HORIZON,
-            max_epochs=config.MAX_EPOCHS,
+            max_epochs=max_epochs,
         )
         logger.info("=" * 60)
         logger.info("WALK-FORWARD EVALUATION COMPLETE:")
@@ -236,9 +238,14 @@ def main():
     # ── 2. Compute indicators & target ───────────────────────────────────────
     # STEP 2: Turn raw candles into mathematical indicators (RSI, MACD, etc)
     # Compute features on the COMPLETE fetched history (including pre-roll bars)
-    # so that rolling indicators (e.g. 720-period Fibonacci) are fully warmed up.
+    # and validate 720-bar Fibonacci warm-up BEFORE fillna(0.0) is applied.
     logger.info("Step 2/5 — Computing technical indicators on complete history (%d bars)", len(df_raw))
-    df_feat_full = build_features(df_raw, add_targets=False)
+    df_feat_full = build_features(
+        df_raw,
+        add_targets=False,
+        requested_start_ts=requested_start_ts,
+        min_warmup_bars=720,
+    )
     
     # Apply Triple Barrier Labeling
     df_feat_full = add_tbm_target(
@@ -251,15 +258,6 @@ def main():
 
     # Retain the requested training date range ONLY AFTER feature computation:
     df_feat = df_feat_full.loc[requested_start_ts:].copy()
-
-    # Ensure the 720-period Fibonacci feature is valid at the beginning of retained dataset
-    if "fib_618_dist_180d" in df_feat.columns:
-        first_fib = df_feat["fib_618_dist_180d"].iloc[0]
-        if np.isnan(first_fib):
-            raise ValueError(
-                f"Fibonacci feature at requested start timestamp ({requested_start_ts}) is NaN! "
-                f"Ensure pre-roll warmup_bars ({args.warmup_bars}) >= 720."
-            )
 
     logger.info(
         "Retained Dataset Range: %s -> %s (%d continuous hourly bars). "
@@ -293,13 +291,16 @@ def main():
     logger.info("  Purge Gap 2 (Val -> Test):  [%d : %d] (%d bars)", purged_val_end, val_end_idx, val_end_idx - purged_val_end)
     logger.info("  Final Test Partition (Frozen Evaluation): [%d : %d] (%d bars)", val_end_idx, len(df_feat), len(df_feat) - val_end_idx)
 
-    scaler_candle, scaler_market = fit_and_save_scalers(df_train)
+    scaler_candle, scaler_market = fit_and_save_scalers(
+        df_train,
+        scaler_candle_path=scaler_candle_path,
+        scaler_market_path=scaler_market_path,
+    )
 
     # ── 4. Build sliding windows ─────────────────────────────────────────────
     # STEP 4: Build continuous lookback windows on unbroken hourly features.
     # Exclude windows with invalid/NaN targets post-construction so that no window skips an hour.
     logger.info("Step 4/5 — Building continuous sliding-window dataset")
-    from config import CANDLE_FEATURES, MARKET_FEATURES
 
     candle_arr, market_arr = transform(df_feat, scaler_candle, scaler_market)
     targets = df_feat["target"].values.astype("float32")
@@ -333,6 +334,9 @@ def main():
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
         purge_horizon=TARGET_HORIZON,
+        max_epochs=max_epochs,
+        patience=patience,
+        model_path=model_path,
     )
 
     val_metrics = results["validation_metrics"]
@@ -342,14 +346,13 @@ def main():
 
     logger.info("=" * 60)
     logger.info("Training finished. Artifacts saved:")
-    from config import MODEL_PATH, SCALER_CANDLE_PATH, SCALER_MARKET_PATH
-    logger.info("  Model   -> %s", MODEL_PATH)
-    logger.info("  Scaler1 -> %s", SCALER_CANDLE_PATH)
-    logger.info("  Scaler2 -> %s", SCALER_MARKET_PATH)
+    logger.info("  Model   -> %s", model_path)
+    logger.info("  Scaler1 -> %s", scaler_candle_path)
+    logger.info("  Scaler2 -> %s", scaler_market_path)
     logger.info("Run  python live.py  to start the live signal engine.")
     logger.info("=" * 60)
     logger.info("VALIDATION (MODEL SELECTION & CALIBRATION PARTITION):")
-    logger.info("  Best Epoch: %d (Criterion: %s = %.4f)", val_metrics.get("best_epoch", 0), args.checkpoint_metric, val_metrics.get("best_checkpoint_metric_val", 0.0))
+    logger.info("  Best Epoch: %d / %d (Criterion: %s = %.4f)", val_metrics.get("best_epoch", 0), val_metrics.get("epochs_trained", 0), args.checkpoint_metric, val_metrics.get("best_checkpoint_metric_val", 0.0))
     logger.info("  Directional Accuracy: %.2f%%", val_metrics["trading_signal_directional_accuracy"] * 100)
     logger.info("  Regression MSE:       %.4f (Trivial Zero Baseline: %.4f)", val_metrics["regression_mse"], val_metrics["trivial_zero_mse"])
     logger.info("  Fitted Temperature:   T = %.4f", cal_res.get("fitted_temperature", 1.0))
@@ -376,7 +379,7 @@ def main():
 
         if unc_res and "block_evaluations" in unc_res:
             logger.info("-" * 60)
-            logger.info("BLOCK BOOTSTRAP UNCERTAINTY ESTIMATION (95%% CIs):")
+            logger.info("BLOCK BOOTSTRAP UNCERTAZZINTY ESTIMATION (95%% CIs):")
             for b_name, b_data in unc_res["block_evaluations"].items():
                 acc_ci = b_data["directional_accuracy"]
                 mse_ci = b_data["regression_mse"]
