@@ -1,0 +1,17 @@
+{
+  "audit-bridge-logger": {
+    "enabled": true,
+    "PostToolUse": [
+      {
+        "matcher": "run_command|write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ../audit_bridge/hook_handler.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

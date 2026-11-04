@@ -1,0 +1,49 @@
+# ─── Python ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Environment & Secrets ────────────────────────────────────────
+.env
+*.pem
+*.ppk
+settings.json
+
+# ─── IDE / Editor ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Logs & Runtime Data ─────────────────────────────────────────
+logs/
+*.log
+
+# ─── Database ─────────────────────────────────────────────────────
+*.db
+*.sqlite3
+
+# ─── Model Checkpoints (large binary files) ──────────────────────
+checkpoints/
+
+# ─── Build / Deploy Artifacts ─────────────────────────────────────
+*.zip
+*.tar.gz
+
+# ─── OS Generated ────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ─── Audit Bridge ─────────────────────────────────────────────────────────────
+audit_bridge/.task_counter
+audit_bridge/snapshots/*.pt
+audit_bridge/snapshots/*.pkl
+audit_bridge/agent_activity.jsonl
+audit_bridge/change_history.json
+audit_bridge/latest_*.json
+audit_bridge/reports/
