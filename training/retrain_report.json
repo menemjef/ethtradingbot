@@ -1,0 +1,130 @@
+{
+  "report_metadata": {
+    "title": "ETH Trading Bot Baseline Model Retraining Report",
+    "timestamp_utc": "2026-11-04T12:12:33Z",
+    "timestamp_local": "2026-11-04T17:42:33+05:30",
+    "disclaimer": "This is a training-performance report documenting model convergence, validation directional accuracy, and data consistency under historical conditions. It is NOT proof of profitability, financial advice, or a guarantee of live trading success."
+  },
+  "dataset_manifest": {
+    "symbol": "ETH/USDT:USDT",
+    "timeframe": "1h",
+    "candles_requested": 20000,
+    "candles_fetched": 20000,
+    "unique_timestamps": 20000,
+    "duplicate_timestamps": 0,
+    "missing_intervals": 0,
+    "min_timestamp": "2024-05-01T21:00:00+00:00",
+    "max_timestamp": "2026-08-13T04:00:00+00:00",
+    "dataset_sha256": "80f52a5bfe4f6c037876c4df916e933e7e9f694920a409111d028052276fac58",
+    "total_feature_rows": 19985,
+    "feature_dimensions": 53,
+    "target_methodology": "Triple Barrier Method (PT=3.0, SL=1.5, Horizon=12)",
+    "target_distribution": {
+      "long_count": 10136,
+      "long_pct": 50.718,
+      "short_count": 9849,
+      "short_pct": 49.282
+    }
+  },
+  "training_configuration": {
+    "command": "python train.py --limit 20000 --seed 42",
+    "seed": 42,
+    "model_architecture": "HybridModel (CNN + LSTM + Multi-Task Heads)",
+    "candle_features": 8,
+    "market_features": 44,
+    "total_features": 52,
+    "lookback_window": 24,
+    "train_split": 0.80,
+    "train_samples": 15968,
+    "val_samples": 3993,
+    "total_windows": 19961,
+    "batch_size": 128,
+    "initial_learning_rate": 0.0005,
+    "lr_warmup_epochs": 5,
+    "lr_scheduler": "CosineAnnealingLR (eta_min=1e-6)",
+    "optimizer": "Adam (weight_decay=0.001)",
+    "loss_functions": {
+      "classification": "BCEWithLogitsLoss (pos_weight=1.17, label_smoothing=0.25)",
+      "regression": "MSELoss",
+      "classification_weight": 1.0,
+      "regression_weight": 1.0
+    },
+    "max_epochs": 300,
+    "early_stopping_patience": 30,
+    "device": "NVIDIA GeForce RTX 4050 Laptop GPU (cuda)"
+  },
+  "training_and_validation_results": {
+    "epochs_trained": 32,
+    "best_epoch": 2,
+    "early_stopping_epoch": 32,
+    "best_validation_loss_mse": 1.0015,
+    "best_epoch_train_loss": 1.7853,
+    "lowest_train_loss_achieved": 1.2980,
+    "best_epoch_top20_accuracy_pct": 47.74,
+    "final_validation_directional_accuracy_all_pct": 51.29,
+    "threshold_filtered_validation_accuracy_pct": 53.59,
+    "threshold_filtered_sample_count": 948,
+    "threshold_cutoff": 0.0450
+  },
+  "model_artifacts": {
+    "checkpoints_directory": "checkpoints/",
+    "pre_retrain_backups": {
+      "backup_directory": "C:\\Python Projects\\trading_bot_backups\\baseline_pre_retrain",
+      "best_model_pt_sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+      "scaler_candle_pkl_sha256": "d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c",
+      "scaler_market_pkl_sha256": "d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d"
+    },
+    "retrained_artifacts": {
+      "best_model_pt": {
+        "path": "checkpoints/best_model.pt",
+        "size_bytes": 321634,
+        "sha256": "ac224bb7731f26b46d3f1cdc8cf39457742f7afde81799b31d67f9e02e3505bb"
+      },
+      "scaler_candle_pkl": {
+        "path": "checkpoints/scaler_candle.pkl",
+        "size_bytes": 807,
+        "sha256": "b8e8da465b61cc47dd43ecbef3fd47df037362f4b17e6a54e1f3620b29dab5e4"
+      },
+      "scaler_market_pkl": {
+        "path": "checkpoints/scaler_market.pkl",
+        "size_bytes": 1671,
+        "sha256": "9d62bd29c91cfa45762c1ed23f8eb21e3eddc65be2d613a63ebfd2af4cced281"
+      }
+    },
+    "inference_verification": {
+      "state_dict_loaded": true,
+      "regression_output_shape": [16, 1],
+      "classification_output_shape": [16, 1],
+      "nan_or_inf_detected": false
+    }
+  },
+  "test_execution_results": {
+    "unit_pipeline_tests": {
+      "command": "python -m unittest discover tests -v",
+      "total": 10,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0,
+      "status": "PASSED"
+    },
+    "audit_bridge_tests": {
+      "command": "python tests/test_audit_bridge.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "status": "PASSED"
+    },
+    "cumulative_tests": {
+      "total": 18,
+      "passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "all_passed": true
+    }
+  },
+  "warnings_and_diagnostics": [
+    "hmmlearn non-convergence warnings during regime feature extraction on historical candle subsets (standard HMM boundary warnings handled gracefully).",
+    "Validation MSE achieved global minimum at epoch 2 (1.0015); subsequent epochs showed generalization divergence, triggering early stopping at epoch 32 (patience=30)."
+  ]
+}
