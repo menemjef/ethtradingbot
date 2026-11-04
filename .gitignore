@@ -47,3 +47,6 @@ audit_bridge/agent_activity.jsonl
 audit_bridge/change_history.json
 audit_bridge/latest_*.json
 audit_bridge/reports/
+
+# ─── Scratch & Local Research Cache ──────────────────────────────────────────
+scratch/

@@ -52,13 +52,16 @@ def simulate_trades_ohlc(
     signals: np.ndarray,
     df_test: pd.DataFrame,
     decision_timestamps: Optional[List[Any]] = None,
+    decision_atrs: Optional[np.ndarray] = None,
     signal_threshold: float = SIGNAL_THRESHOLD,
     pt_mult: float = TBM_PT_MULT,
     sl_mult: float = TBM_SL_MULT,
     holding_max: int = TARGET_HORIZON,
     taker_fee: float = 0.0005,
-    maker_fee: float = 0.0002,
+    maker_fee: float = 0.0005,
     slippage: float = 0.0003,
+    funding_rates: Optional[Dict[Any, float]] = None,
+    funding_stress_rate: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     OHLC-aware barrier trade simulation:
@@ -132,7 +135,12 @@ def simulate_trades_ohlc(
                 entry_bar = i
                 entry_time = curr_time
                 dec_time = curr_dec_time
-                current_atr = atrs[i]
+                # Decision-time ATR (no lookahead into entry candle i complete OHLC)
+                if decision_atrs is not None:
+                    current_atr = decision_atrs[i]
+                else:
+                    dec_idx = i - 1 if i >= 1 else 0
+                    current_atr = atrs[dec_idx]
                 pt_price = entry_price + (pt_mult * current_atr)
                 sl_price = entry_price - (sl_mult * current_atr)
                 in_pos = True
@@ -144,7 +152,12 @@ def simulate_trades_ohlc(
                 entry_bar = i
                 entry_time = curr_time
                 dec_time = curr_dec_time
-                current_atr = atrs[i]
+                # Decision-time ATR (no lookahead into entry candle i complete OHLC)
+                if decision_atrs is not None:
+                    current_atr = decision_atrs[i]
+                else:
+                    dec_idx = i - 1 if i >= 1 else 0
+                    current_atr = atrs[dec_idx]
                 pt_price = entry_price - (pt_mult * current_atr)
                 sl_price = entry_price + (sl_mult * current_atr)
                 in_pos = True
@@ -176,7 +189,7 @@ def simulate_trades_ohlc(
                     exit_price = curr_open * (1.0 - slippage)
                     exit_slip_cost = slippage
                     exit_reason = "take_profit_gap"
-                    exit_fee = maker_fee
+                    exit_fee = taker_fee
                 else:
                     hit_sl = bool(curr_low <= sl_price)
                     hit_tp = bool(curr_high >= pt_price)
@@ -203,7 +216,7 @@ def simulate_trades_ohlc(
                         exit_price = pt_price * (1.0 - slippage)
                         exit_slip_cost = slippage
                         exit_reason = "take_profit"
-                        exit_fee = maker_fee
+                        exit_fee = taker_fee
                     elif holding_bars >= holding_max:
                         exit_trade = True
                         raw_exit_price = curr_close
@@ -228,7 +241,7 @@ def simulate_trades_ohlc(
                     exit_price = curr_open * (1.0 + slippage)
                     exit_slip_cost = slippage
                     exit_reason = "take_profit_gap"
-                    exit_fee = maker_fee
+                    exit_fee = taker_fee
                 else:
                     hit_sl = bool(curr_high >= sl_price)
                     hit_tp = bool(curr_low <= pt_price)
@@ -255,7 +268,7 @@ def simulate_trades_ohlc(
                         exit_price = pt_price * (1.0 + slippage)
                         exit_slip_cost = slippage
                         exit_reason = "take_profit"
-                        exit_fee = maker_fee
+                        exit_fee = taker_fee
                     elif holding_bars >= holding_max:
                         exit_trade = True
                         raw_exit_price = curr_close
@@ -284,11 +297,26 @@ def simulate_trades_ohlc(
                 entry_f = taker_fee
                 exit_f = exit_fee
                 tot_fees = entry_f + exit_f
-                # 4. Funding cost (explicitly zero / excluded)
+
+                # 4. Funding Settlement (8-hour timestamps: 00:00, 08:00, 16:00 UTC)
                 funding_f = 0.0
+                for b_idx in range(entry_bar, i + 1):
+                    b_ts = timestamps[b_idx]
+                    is_funding_bar = False
+                    if hasattr(b_ts, 'hour') and hasattr(b_ts, 'minute'):
+                        if b_ts.hour in (0, 8, 16) and b_ts.minute == 0:
+                            is_funding_bar = True
+                    if is_funding_bar:
+                        rate = 0.0
+                        if funding_rates is not None:
+                            ts_str = str(b_ts)
+                            rate = funding_rates.get(ts_str, funding_rates.get(b_ts, 0.0))
+                        elif funding_stress_rate is not None:
+                            rate = funding_stress_rate
+                        funding_f += float(side * rate)
 
                 # 5. Net return
-                net_ret = float(side * ((exit_price - entry_price) / entry_price) - tot_fees)
+                net_ret = float(side * ((exit_price - entry_price) / entry_price) - tot_fees - funding_f)
 
                 trades.append({
                     "trade_id": trade_id,
@@ -314,7 +342,11 @@ def simulate_trades_ohlc(
                     "entry_fee_cost": float(entry_f),
                     "exit_fee_cost": float(exit_f),
                     "funding_cost": float(funding_f),
-                    "funding_disclosure": "Excluded (historical funding rate data not attached)",
+                    "funding_cost": float(funding_f),
+                    "funding_disclosure": (
+                        "Historical funding settlements applied" if funding_rates is not None
+                        else ("Funding stress applied" if funding_stress_rate is not None else "Excluded (unattached)")
+                    ),
                     "net_return": float(net_ret),
                 })
 
@@ -653,11 +685,19 @@ def run_walk_forward_evaluation(
         else:
             reg_acc, mse_val = 0.5, 1.0
 
+        # Compute strictly known decision-time ATRs for each test bar (bar j-1 close ATR)
+        dec_atrs = []
+        for j in range(N_test):
+            dec_bar_idx = te_start_idx + j - 1
+            dec_atrs.append(df_feat["atr_14"].iloc[dec_bar_idx])
+        dec_atrs = np.array(dec_atrs, dtype=np.float32)
+
         # 7. OHLC-Aware Trade Simulation with Next-Bar Execution and Gap Accounting
         sim_res = simulate_trades_ohlc(
             signals=test_signals,
             df_test=df_test_window,
             decision_timestamps=dec_times,
+            decision_atrs=dec_atrs,
             signal_threshold=signal_threshold,
             pt_mult=pt_mult,
             sl_mult=sl_mult,
