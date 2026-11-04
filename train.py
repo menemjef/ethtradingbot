@@ -222,9 +222,17 @@ def main():
             test_ratio=0.125,
             purge_horizon=TARGET_HORIZON,
             max_epochs=max_epochs,
+            requested_start_ts=requested_start_ts,
+            min_warmup_bars=720,
         )
         logger.info("=" * 60)
         logger.info("WALK-FORWARD EVALUATION COMPLETE:")
+        ds_meta = wf_results.get("dataset_metadata", {})
+        if ds_meta:
+            logger.info("  Requested Start: %s | Retained: %s -> %s (%d rows) | Pre-roll Excluded: %d rows",
+                        ds_meta.get("requested_start_ts"), ds_meta.get("retained_start_ts"),
+                        ds_meta.get("retained_end_ts"), ds_meta.get("retained_rows", 0),
+                        ds_meta.get("pre_roll_rows_excluded", 0))
         agg = wf_results["aggregate_summary"]
         logger.info("  Mean Directional Accuracy: %.2f%% (std: %.2f%%)", agg["mean_directional_accuracy_pct"], agg["std_directional_accuracy_pct"])
         logger.info("  Mean Trade Win Rate:      %.2f%% (Pooled: %.2f%%)", agg.get("mean_win_rate_pct", 0.0), agg.get("pooled_win_rate_pct", 0.0))
@@ -379,7 +387,7 @@ def main():
 
         if unc_res and "block_evaluations" in unc_res:
             logger.info("-" * 60)
-            logger.info("BLOCK BOOTSTRAP UNCERTAZZINTY ESTIMATION (95%% CIs):")
+            logger.info("BLOCK BOOTSTRAP UNCERTAINTY ESTIMATION (95%% CIs):")
             for b_name, b_data in unc_res["block_evaluations"].items():
                 acc_ci = b_data["directional_accuracy"]
                 mse_ci = b_data["regression_mse"]

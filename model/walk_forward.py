@@ -391,6 +391,8 @@ def run_walk_forward_evaluation(
     signal_threshold: float = SIGNAL_THRESHOLD,
     pt_mult: float = TBM_PT_MULT,
     sl_mult: float = TBM_SL_MULT,
+    requested_start_ts: Optional[pd.Timestamp] = None,
+    min_warmup_bars: int = 720,
 ) -> Dict[str, Any]:
     """
     Full end-to-end Walk-Forward Evaluation pipeline with:
@@ -401,13 +403,46 @@ def run_walk_forward_evaluation(
     5. Clean test signal alignment: prediction at candle k-1 close executes at candle k OPEN.
     6. Realistic OHLC-aware simulation with stop-loss gaps and intratrade drawdown tracking.
     7. Pooled profit factor and sequential compounded return aggregation.
+
+    Pre-roll handling (when requested_start_ts is provided):
+    - Indicators are computed on the COMPLETE raw history (pre-roll included) so rolling
+      windows such as the 720-bar Fibonacci are fully warmed up.
+    - The 720-bar Fibonacci warm-up is validated BEFORE fillna(0.0) via build_features().
+    - The feature frame is then sliced to requested_start_ts; TBM labels, N_total and all
+      fold boundaries are derived from the retained frame only. Pre-roll candles serve as
+      indicator context only and never become train / val / test / trade observations.
+
+    If requested_start_ts is None (legacy standalone research usage), the whole dataset is
+    used and no warm-up validation is performed (a warning is logged).
     """
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Initializing Rigorous Walk-Forward Evaluation on device: %s (%d folds)", device, n_splits)
 
-    # 1. Feature Engineering on unbroken timeline
-    df_feat = build_features(df_raw, add_targets=False)
+    # 1. Feature Engineering on the COMPLETE raw timeline (pre-roll included as indicator context).
+    #    When requested_start_ts is given, build_features() validates the 720-bar Fibonacci warm-up
+    #    BEFORE fillna(0.0) and raises ValueError on insufficient history (before any model training).
+    if requested_start_ts is not None:
+        requested_start_ts = pd.Timestamp(requested_start_ts)
+        df_feat_full = build_features(
+            df_raw,
+            add_targets=False,
+            requested_start_ts=requested_start_ts,
+            min_warmup_bars=min_warmup_bars,
+        )
+        # 2. Slice to the requested range ONLY AFTER indicators have been computed and validated.
+        df_feat = df_feat_full.loc[requested_start_ts:].copy()
+        pre_roll_rows_excluded = int((df_raw.index < requested_start_ts).sum())
+    else:
+        logger.warning(
+            "run_walk_forward_evaluation called without requested_start_ts: using the entire "
+            "dataset and skipping 720-bar Fibonacci warm-up validation (legacy research mode)."
+        )
+        df_feat = build_features(df_raw, add_targets=False)
+        pre_roll_rows_excluded = 0
+
+    # 3. Triple Barrier labels generated ONLY on the retained frame (no pre-roll labels).
+    fib_warmup_info = df_feat.attrs.get("fib_warmup_validation")
     df_feat = add_tbm_target(
         df_feat,
         pt_mult=pt_mult,
@@ -416,7 +451,24 @@ def run_walk_forward_evaluation(
         ambiguous_resolution="exclude",
     )
 
+    # 4. N_total and all fold boundaries derived from the retained frame only.
     N_total = len(df_feat)
+    dataset_metadata = {
+        "requested_start_ts": str(requested_start_ts) if requested_start_ts is not None else None,
+        "retained_start_ts": str(df_feat.index[0]) if N_total > 0 else None,
+        "retained_end_ts": str(df_feat.index[-1]) if N_total > 0 else None,
+        "raw_rows": int(len(df_raw)),
+        "pre_roll_rows_excluded": pre_roll_rows_excluded,
+        "retained_rows": int(N_total),
+        "min_warmup_bars": int(min_warmup_bars) if requested_start_ts is not None else None,
+        "fib_warmup_validation": fib_warmup_info,
+    }
+    logger.info(
+        "Walk-forward dataset: raw=%d rows | pre-roll excluded=%d | retained=%d rows [%s -> %s]",
+        dataset_metadata["raw_rows"], pre_roll_rows_excluded, N_total,
+        dataset_metadata["retained_start_ts"], dataset_metadata["retained_end_ts"],
+    )
+
     test_size = int(N_total * test_ratio)
     init_train_size = int(N_total * train_ratio)
 
@@ -618,6 +670,8 @@ def run_walk_forward_evaluation(
             "val_samples": len(y_in_va_win),
             "test_samples": N_test,
             "train_timestamps": (str(df_inner_train.index[0]), str(t_in_tr_end)),
+            "inner_val_timestamps": (str(t_in_va_start), str(df_inner_val.index[-1])),
+            "outer_train_timestamps": (str(t_tr_start), str(t_tr_end)),
             "test_timestamps": (str(t_te_start), str(t_te_end)),
             "test_start_ts": str(t_te_start),
             "test_end_ts": str(t_te_end),
@@ -685,4 +739,5 @@ def run_walk_forward_evaluation(
         "aggregate_summary": aggregate,
         "fold_by_fold_results": fold_results,
         "pooled_trades": all_trades,
+        "dataset_metadata": dataset_metadata,
     }

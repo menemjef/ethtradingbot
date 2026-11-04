@@ -1046,12 +1046,151 @@ class TestPass5ArtifactIntegrityAndWalkForward(unittest.TestCase):
         self.assertIn("exit_fee_cost", trade)
         self.assertIn("funding_cost", trade)
         self.assertEqual(trade["funding_cost"], 0.0)
-        self.assertAlmostEqual(trade["Gross_Price_Verify"] if "Gross_Price_Verify" in trade else trade["gross_price_return"], (1950.0 - 2000.0) / 2000.0, places=6)
+        self.assertAlmostEqual(trade["gross_price_return"], (1950.0 - 2000.0) / 2000.0, places=6)
 
         # Verify summary reports both compounded_net_return_pct and sum_net_pnl_pct
         self.assertIn("compounded_net_return_pct", res)
         self.assertIn("sum_net_pnl_pct", res)
         self.assertGreater(res["max_drawdown_pct"], 0.0)
+
+
+def _synthetic_ohlcv(n_rows: int, start: str = "2026-01-01") -> pd.DataFrame:
+    """Deterministic synthetic hourly OHLCV with valid (non-NaN) prices throughout."""
+    dates = pd.date_range(start, periods=n_rows, freq="1h", tz="UTC")
+    price = 2000.0 + 80.0 * np.sin(np.linspace(0, 60, n_rows)) + np.linspace(0, 40, n_rows)
+    return pd.DataFrame({
+        "open": price,
+        "high": price + 12.0,
+        "low": price - 12.0,
+        "close": price + 1.0,
+        "volume": np.linspace(100, 1000, n_rows),
+    }, index=dates)
+
+
+class TestWalkForwardPreRollExclusion(unittest.TestCase):
+    """Final targeted correction: walk-forward must use pre-roll as indicator context only."""
+
+    def test_walk_forward_preroll_exclusion(self):
+        """Test A: 720 pre-roll + 360 requested candles -> no pre-roll timestamp in any research sample."""
+        warmup, requested = 720, 360
+        df_raw = _synthetic_ohlcv(warmup + requested)
+        requested_start_ts = df_raw.index[720]
+
+        wf = run_walk_forward_evaluation(
+            df_raw,
+            n_splits=2,
+            train_ratio=0.50,
+            test_ratio=0.20,
+            purge_horizon=5,
+            max_epochs=1,
+            batch_size=32,
+            device="cpu",
+            signal_threshold=0.0,  # force trades so trade records are inspected
+            requested_start_ts=requested_start_ts,
+            min_warmup_bars=720,
+        )
+
+        meta = wf["dataset_metadata"]
+        self.assertEqual(pd.Timestamp(meta["requested_start_ts"]), requested_start_ts)
+        self.assertEqual(pd.Timestamp(meta["retained_start_ts"]), requested_start_ts)
+        self.assertEqual(pd.Timestamp(meta["retained_end_ts"]), df_raw.index[-1])
+        self.assertEqual(meta["pre_roll_rows_excluded"], 720)
+        self.assertEqual(meta["retained_rows"], requested)
+        self.assertEqual(meta["raw_rows"], warmup + requested)
+        self.assertEqual(meta["fib_warmup_validation"]["valid_prior_bars"], 720)
+
+        self.assertGreater(len(wf["fold_by_fold_results"]), 0)
+        for fold in wf["fold_by_fold_results"]:
+            for key in ("train_timestamps", "inner_val_timestamps", "outer_train_timestamps", "test_timestamps"):
+                start_ts, end_ts = (pd.Timestamp(t) for t in fold[key])
+                self.assertGreaterEqual(start_ts, requested_start_ts, f"{key} start contains pre-roll")
+                self.assertGreaterEqual(end_ts, requested_start_ts, f"{key} end contains pre-roll")
+            self.assertGreaterEqual(pd.Timestamp(fold["first_decision_ts"]), requested_start_ts)
+            for t in fold["trades"]:
+                self.assertGreaterEqual(pd.Timestamp(t["decision_time"]), requested_start_ts)
+                self.assertGreaterEqual(pd.Timestamp(t["entry_time"]), requested_start_ts)
+                self.assertGreaterEqual(pd.Timestamp(t["exit_time"]), requested_start_ts)
+
+        # Existing Pass 5 alignment guarantees are preserved on the retained frame
+        for fold in wf["fold_by_fold_results"]:
+            self.assertEqual(pd.Timestamp(fold["first_execution_open_ts"]), pd.Timestamp(fold["test_start_ts"]))
+            self.assertEqual(
+                pd.Timestamp(fold["first_decision_ts"]) + pd.Timedelta(hours=1),
+                pd.Timestamp(fold["first_execution_open_ts"]),
+            )
+
+    def test_walk_forward_rejects_insufficient_preroll(self):
+        """Test B: 719 pre-roll candles -> Fibonacci warm-up ValueError before any model is constructed."""
+        warmup, requested = 719, 360
+        df_raw = _synthetic_ohlcv(warmup + requested)
+        requested_start_ts = df_raw.index[719]
+
+        with patch("model.walk_forward.HybridModel") as mock_model_cls:
+            with self.assertRaises(ValueError) as ctx:
+                run_walk_forward_evaluation(
+                    df_raw,
+                    n_splits=2,
+                    train_ratio=0.50,
+                    test_ratio=0.20,
+                    purge_horizon=5,
+                    max_epochs=1,
+                    batch_size=32,
+                    device="cpu",
+                    requested_start_ts=requested_start_ts,
+                    min_warmup_bars=720,
+                )
+            mock_model_cls.assert_not_called()
+        self.assertIn("Fibonacci warm-up validation failed", str(ctx.exception))
+        self.assertIn("only 719 valid historical observations", str(ctx.exception))
+
+    def test_train_entrypoint_passes_requested_start_ts_to_walk_forward(self):
+        """Test C: train.py --walk-forward passes its own requested_start_ts (no recomputation) and min_warmup_bars=720."""
+        warmup, limit = 720, 300
+        df_mock = _synthetic_ohlcv(warmup + limit)
+        expected_start_ts = df_mock.index[-limit]  # == df_mock.index[720]
+        self.assertEqual(expected_start_ts, df_mock.index[720])
+
+        hashes_before = {p: _sha256_file(p) for p in (config.MODEL_PATH, config.SCALER_CANDLE_PATH, config.SCALER_MARKET_PATH)}
+        captured = {}
+
+        def fake_wf(df_raw_arg, **kwargs):
+            captured["df_raw"] = df_raw_arg
+            captured.update(kwargs)
+            return {
+                "aggregate_summary": {
+                    "mean_directional_accuracy_pct": 50.0,
+                    "std_directional_accuracy_pct": 0.0,
+                    "total_net_pnl_sum_pct": 0.0,
+                },
+                "fold_by_fold_results": [],
+                "pooled_trades": [],
+                "dataset_metadata": {},
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(config, "MODEL_PATH", os.path.join(tmpdir, "m.pt")), \
+                 patch.object(config, "SCALER_CANDLE_PATH", os.path.join(tmpdir, "sc.pkl")), \
+                 patch.object(config, "SCALER_MARKET_PATH", os.path.join(tmpdir, "sm.pkl")), \
+                 patch("train.fetch_ohlcv", return_value=df_mock) as mock_fetch, \
+                 patch("model.walk_forward.run_walk_forward_evaluation", side_effect=fake_wf), \
+                 patch("train.train_model") as mock_train, \
+                 patch("train.fit_and_save_scalers") as mock_fit, \
+                 patch("sys.argv", ["train.py", "--walk-forward", "--fast", "--limit", str(limit), "--warmup-bars", str(warmup)]):
+                train_main()
+
+            mock_fetch.assert_called_once()
+            mock_train.assert_not_called()
+            mock_fit.assert_not_called()
+            self.assertEqual(os.listdir(tmpdir), [], "Walk-forward path must not write artifacts")
+
+        self.assertEqual(pd.Timestamp(captured["requested_start_ts"]), expected_start_ts)
+        self.assertEqual(captured["min_warmup_bars"], 720)
+        # Full raw history (pre-roll included) is handed over for indicator context
+        self.assertEqual(len(captured["df_raw"]), warmup + limit)
+        self.assertEqual(captured["df_raw"].index[0], df_mock.index[0])
+
+        for p, h in hashes_before.items():
+            self.assertEqual(_sha256_file(p), h, f"Production artifact modified: {p}")
 
 
 if __name__ == "__main__":

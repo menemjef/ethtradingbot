@@ -486,3 +486,43 @@ Per Priority 0 rules 6 and 7, no older backup was blindly restored over `checkpo
 1. **Overwritten Unweighted Active Artifact (`ac224bb7...`):** Because Pass 4's `test_train_py_full_orchestration_mocked()` ran before path isolation was added, the single unsuffixed `checkpoints/best_model.pt` (`ac224bb7...`) was overwritten by a 5-epoch synthetic smoke-test checkpoint (`0dfa18e7...`). All pre-retrain baseline artifacts (`8b7b979e...`) and suffixed 20,000-candle multi-seed checkpoints (`best_model_42.pt`, `best_model_1337.pt`, `best_model_7.pt`) remain intact. A fresh controlled production training run (once approved) or explicit promotion of a verified checkpoint will be needed before live deployment.
 2. **Historical Perpetual Funding Cost in OHLC Walk-Forward Simulator:** While `simulate_trades_ohlc()` now itemizes `funding_cost: 0.0` with explicit disclosure (`"not_modeled_in_ohlc_simulation"`), integrating historical 8-hour perpetual funding rate schedules into trade-level PnL requires passing aligned historical funding rate series into `simulate_trades_ohlc()`.
 3. **1-Hour OHLC Granularity for Intrabar Collisions:** When both TP and SL are touched within the same 1-hour candle during walk-forward simulation, the simulator conservatively resolves `stop_loss_collision` (stop-first) unless lower-timeframe (e.g., 1-minute or 15-minute) sub-bars are supplied.
+
+
+---
+
+## Final Targeted Correction: Walk-Forward Pre-Roll Exclusion & Warm-Up Enforcement (2026-11-04)
+
+> **Baseline Commit Inspected:** `dcf18cf215cc4aa7a358b65ee9e541dd4577d6fe`  
+> **Status:** Walk-forward pre-roll exclusion and 720-bar Fibonacci warm-up validation enforced; 3 new targeted regression tests added; all 41 `unittest discover` tests + 8 `test_audit_bridge.py` tests pass with zero artifact mutation.
+
+### 31. Defect Confirmation & Resolution
+
+#### A. Defect Confirmed in Commit `dcf18cf`
+- In `train.py`, `requested_start_ts` was computed after data fetching (`df_raw.index[-limit]`), but the `if args.walk_forward:` branch invoked `run_walk_forward_evaluation(df_raw, ...)` without passing `requested_start_ts` or `min_warmup_bars`.
+- Inside `model/walk_forward.py`, `run_walk_forward_evaluation()` called `build_features(df_raw, add_targets=False)` without `requested_start_ts`, skipped the 720-bar pre-`fillna(0.0)` Fibonacci warm-up validation, and calculated `N_total = len(df_feat)` across the full dataset including the 720 pre-roll candles.
+
+#### B. Old vs. New Walk-Forward Preprocessing Order
+
+| Step | Old Order (`dcf18cf`) | New Order (Corrected) |
+|---|---|---|
+| 1 | Receive `df_raw` (including pre-roll) | Receive `df_raw` (including pre-roll), `requested_start_ts`, and `min_warmup_bars=720` |
+| 2 | Call `build_features(df_raw, add_targets=False)` without `requested_start_ts` | Compute indicators on complete `df_raw` and validate $\ge 720$ valid prior OHLC bars + non-`NaN` raw `fib_618_dist_180d` at `requested_start_ts` **before** `fillna(0.0)` |
+| 3 | Add TBM labels on unsliced `df_feat` (including pre-roll) | Slice retained dataset: `df_feat = df_feat_full.loc[requested_start_ts:].copy()` |
+| 4 | Compute `N_total = len(df_feat)` (including pre-roll) | Generate TBM labels (`add_tbm_target`) strictly on the sliced retained `df_feat` |
+| 5 | Construct fold boundaries over pre-roll + requested bars | Compute `N_total = len(df_feat)` and construct all outer-train, inner-train, inner-val, and outer-test fold boundaries strictly on the retained dataset |
+
+#### C. Walk-Forward Dataset Metadata (`dataset_metadata`)
+`run_walk_forward_evaluation()` now returns `dataset_metadata` containing:
+- `requested_start_ts`: Timestamp where requested dataset begins
+- `retained_start_ts`: First timestamp of retained `df_feat` (`== requested_start_ts`)
+- `retained_end_ts`: Final timestamp of retained `df_feat`
+- `raw_rows`: Total rows in `df_raw` (pre-roll + requested)
+- `pre_roll_rows_excluded`: Exact count of excluded pre-roll rows (`720`)
+- `retained_rows`: Exact count of retained rows (`N_total`)
+- `min_warmup_bars`: Enforced minimum pre-roll warm-up bars (`720`)
+- `fib_warmup_validation`: Output dictionary from `validate_fibonacci_warmup()`
+
+#### D. Targeted Regression Tests (`TestWalkForwardPreRollExclusion`)
+1. **`test_walk_forward_preroll_exclusion` (Test A):** Feeds 720 pre-roll + 360 requested candles (`1,080` total) with `requested_start_ts = df_raw.index[720]`. Verifies `pre_roll_rows_excluded == 720`, `retained_rows == 360`, `retained_start_ts == requested_start_ts`, and asserts that all fold `train_timestamps`, `inner_val_timestamps`, `outer_train_timestamps`, `test_timestamps`, `first_decision_ts`, and trade `decision_time` / `entry_time` / `exit_time` are $\ge \text{requested\_start\_ts}$.
+2. **`test_walk_forward_rejects_insufficient_preroll` (Test B):** Feeds 719 pre-roll + 360 requested candles with `requested_start_ts = df_raw.index[719]`. Verifies `run_walk_forward_evaluation()` raises `ValueError` (`Fibonacci warm-up validation failed: only 719 valid historical observations...`) before `HybridModel` is ever instantiated.
+3. **`test_train_entrypoint_passes_requested_start_ts_to_walk_forward` (Test C):** Verifies `train.py --walk-forward` passes its computed `requested_start_ts` and `min_warmup_bars=720` directly to `run_walk_forward_evaluation()` without touching any checkpoint or scaler files.
