@@ -81,6 +81,33 @@ def main():
         default="",
         help="Path to a local CSV candle cache (skips Binance fetch — useful for local GPU training)",
     )
+    parser.add_argument(
+        "--warmup-bars",
+        type=int,
+        default=50,
+        help="Extra pre-roll candles to fetch for indicator warm-up (default: 50)",
+    )
+    parser.add_argument(
+        "--pos-weight-mode",
+        type=str,
+        default="balanced",
+        choices=["balanced", "unweighted", "legacy_1.17"],
+        help="Positive class weighting strategy for BCE (default: balanced from training data)",
+    )
+    parser.add_argument(
+        "--checkpoint-metric",
+        type=str,
+        default="regression_mse",
+        choices=["regression_mse", "classification_loss", "directional_accuracy"],
+        help="Validation metric for checkpoint selection (default: regression_mse)",
+    )
+    parser.add_argument(
+        "--ambiguous-resolution",
+        type=str,
+        default="exclude",
+        choices=["exclude", "stop_first", "overshoot"],
+        help="Resolution for candles breaching both PT and SL (default: exclude for directional training)",
+    )
     args = parser.parse_args()
 
     # Apply seed
@@ -119,8 +146,8 @@ def main():
         if df_raw.index.tz is None:
             df_raw.index = df_raw.index.tz_localize('UTC')
     else:
-        logger.info("Step 1/5 — Fetching %d x %s candles for %s", limit, TIMEFRAME, SYMBOL)
-        df_raw = fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit)
+        logger.info("Step 1/5 — Fetching %d x %s candles for %s (warmup_bars: %d)", limit, TIMEFRAME, SYMBOL, args.warmup_bars)
+        df_raw = fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit, warmup_bars=args.warmup_bars)
     logger.info("Raw data shape: %s | Date range: %s -> %s",
                 df_raw.shape, df_raw.index[0], df_raw.index[-1])
 
@@ -133,7 +160,7 @@ def main():
     # Apply Triple Barrier Labeling
     # This creates the "Target" (what the AI tries to predict). It simulates 
     # taking a trade and seeing if it hits Profit Target (PT) or Stop Loss (SL).
-    df_feat = add_tbm_target(df_feat, TBM_PT_MULT, TBM_SL_MULT, TARGET_HORIZON)
+    df_feat = add_tbm_target(df_feat, TBM_PT_MULT, TBM_SL_MULT, TARGET_HORIZON, ambiguous_resolution=args.ambiguous_resolution)
     df_feat = df_feat.dropna(subset=["target"])
     
     logger.info("Feature data shape: %s", df_feat.shape)
@@ -177,7 +204,11 @@ def main():
     # STEP 5: Feed the windows into the CNN + LSTM model and let it learn!
     # It will loop over the data (Epochs) trying to minimize its errors.
     logger.info("Step 5/5 — Training HybridModel")
-    model, metrics = train_model(X_candle, X_market, y)
+    model, metrics = train_model(
+        X_candle, X_market, y,
+        pos_weight_mode=args.pos_weight_mode,
+        checkpoint_metric=args.checkpoint_metric,
+    )
     val_acc = metrics["trading_signal_directional_accuracy"]
     val_acc_thresh = metrics["threshold_filtered"]["trading_signal_accuracy"]
 

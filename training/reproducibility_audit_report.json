@@ -1,0 +1,63 @@
+{
+  "timestamp_utc": "2026-11-04T14:41:38.944761+00:00",
+  "python_version": "3.10.6 (tags/v3.10.6:9c7b4bd, Aug  1 2022, 21:53:49) [MSC v.1932 64 bit (AMD64)]",
+  "torch_version": "2.6.0+cu124",
+  "device": "cuda",
+  "artifacts_provenance": {
+    "active_checkpoint": {
+      "path": "C:\\Python Projects\\trading bot\\checkpoints\\best_model.pt",
+      "sha256": "ac224bb7731f26b46d3f1cdc8cf39457742f7afde81799b31d67f9e02e3505bb",
+      "expected_baseline_sha256": "ac224bb7731f26b46d3f1cdc8cf39457742f7afde81799b31d67f9e02e3505bb",
+      "matches_baseline_run": true
+    },
+    "active_scaler_candle": {
+      "path": "C:\\Python Projects\\trading bot\\checkpoints\\scaler_candle.pkl",
+      "sha256": "b8e8da465b61cc47dd43ecbef3fd47df037362f4b17e6a54e1f3620b29dab5e4"
+    },
+    "active_scaler_market": {
+      "path": "C:\\Python Projects\\trading bot\\checkpoints\\scaler_market.pkl",
+      "sha256": "9d62bd29c91cfa45762c1ed23f8eb21e3eddc65be2d613a63ebfd2af4cced281"
+    },
+    "pre_retrain_backup": {
+      "backup_dir": "C:\\Python Projects\\trading_bot_backups\\baseline_pre_retrain",
+      "best_model_pt_sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+      "expected_backup_sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+      "matches_original_backup": true
+    }
+  },
+  "evaluation_reproduction": {
+    "dataset_candle_count": 5000,
+    "dataset_date_start": "2026-04-10 06:00:00+00:00",
+    "dataset_date_end": "2026-11-04 13:00:00+00:00",
+    "validation_windows": 993,
+    "regression_directional_accuracy_pct": 49.24,
+    "classification_directional_accuracy_pct": 49.04,
+    "regression_mse": 0.9997,
+    "trivial_zero_mse": 1.0,
+    "brier_score": 0.2514,
+    "log_loss": 0.6959,
+    "expected_calibration_error_ece": 0.0392,
+    "threshold_filtered": {
+      "threshold": 0.045,
+      "samples_passing": 261,
+      "pct_passing": 26.283987915407852,
+      "trading_signal_accuracy": 0.49808429118773945,
+      "classification_accuracy": 0.47126436781609193,
+      "regression_mse": 0.9982485771179199
+    },
+    "regression_output_stats": {
+      "min": -0.04919527843594551,
+      "max": 0.09656377136707306,
+      "mean": 0.021681996062397957,
+      "std": 0.030806632712483406
+    }
+  },
+  "ambiguous_candle_analysis": {
+    "total_bars_scanned": 4988,
+    "ambiguous_bars_count": 8,
+    "ambiguous_bars_pct": 0.16,
+    "legacy_overshoot_wins": 7,
+    "legacy_overshoot_losses": 1,
+    "recommendation": "Exclude from directional training dataset to eliminate artificial bias"
+  }
+}

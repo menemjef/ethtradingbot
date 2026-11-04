@@ -120,6 +120,7 @@ def fetch_ohlcv(
     validate: bool = True,
     warmup_bars: int = 0,
     exclude_unclosed: bool = True,
+    raise_on_gap: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV candles for the given symbol/timeframe.
@@ -129,6 +130,7 @@ def fetch_ohlcv(
     - Excludes currently forming (unclosed) candles.
     - Correctly paginates across Binance's maximum page size (1000 per call).
     - Avoids duplicate timestamps, ensures strict chronological ordering, and verifies continuous intervals.
+    - Safely detects non-progressing exchange cursors to prevent infinite loops.
     - Explicitly reports any shortfall if the exchange cannot supply the requested count.
 
     Args:
@@ -139,6 +141,7 @@ def fetch_ohlcv(
         validate:         Whether to validate data quality
         warmup_bars:      Extra pre-roll candles to fetch for indicator warm-up
         exclude_unclosed: If True, excludes any candle that has not yet closed
+        raise_on_gap:     If True, raises a ValueError on detected missing intervals
 
     Returns:
         pd.DataFrame with columns [open, high, low, close, volume]
@@ -176,6 +179,7 @@ def fetch_ohlcv(
             pd.to_datetime(since_ms, unit="ms", utc=True),
         )
 
+    prev_since = None
     while True:
         fetch_n = per_page
         if target_end_ms is not None:
@@ -212,8 +216,18 @@ def fetch_ohlcv(
         if len(raw) < fetch_n:
             break
 
-        # Advance since past the last fetched candle
-        since = raw[-1][0] + tf_ms
+        # Safety: Cursor progression validation to prevent infinite loops
+        last_candle_ms = raw[-1][0]
+        next_since = last_candle_ms + tf_ms
+        if next_since <= since:
+            logger.warning(
+                "Exchange pagination cursor did not advance (current since: %d, last candle: %d). "
+                "Terminating pagination to prevent infinite loop.",
+                since, last_candle_ms,
+            )
+            break
+        prev_since = since
+        since = next_since
 
         time.sleep(exchange.rateLimit / 1000)
 
@@ -246,10 +260,13 @@ def fetch_ohlcv(
         expected_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq=freq_str)
         missing_intervals = expected_range.difference(df.index)
         if len(missing_intervals) > 0:
-            logger.warning(
-                "Detected %d missing intervals in fetched OHLCV between %s and %s",
-                len(missing_intervals), df.index.min(), df.index.max(),
+            msg = (
+                f"Detected {len(missing_intervals)} missing intervals in fetched OHLCV "
+                f"between {df.index.min()} and {df.index.max()}"
             )
+            logger.warning(msg)
+            if raise_on_gap:
+                raise ValueError(f"Data integrity failure: {msg}")
 
     # 5. Check for shortfall against requested completed candles
     if len(df) < limit:

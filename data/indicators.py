@@ -11,9 +11,12 @@ All indicators are computed using pandas and pandas_ta (no TA-Lib dependency).
 The output matches EXACTLY what the live engine recomputes at inference time.
 """
 
+import logging
 import numpy as np
 import pandas as pd
 from data.quant_models import compute_hmm_regimes, compute_garch_volatility, compute_arima_forecast
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -291,7 +294,8 @@ def add_tbm_target(
     pt_mult: float,
     sl_mult: float,
     horizon: int,
-    ambiguous_resolution: str = "stop_first",
+    ambiguous_resolution: str = "exclude",
+    df_ltf: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     Triple Barrier Method (TBM) labeling.
@@ -308,10 +312,14 @@ def add_tbm_target(
 
     Ambiguous Resolution:
     When both PT and SL barriers are breached inside the same OHLC candle,
-    the intra-candle sequence cannot be known from OHLC data alone.
-    - "stop_first" (default / conservative): Assumes stop was triggered first (-1.0).
-    - "overshoot" (legacy): Chooses the barrier with larger overshoot beyond barrier price.
-    - "exclude": Sets target to NaN (excluded from training).
+    the intra-candle sequence cannot be known from single-timeframe OHLC data alone.
+    - "exclude" (default / recommended for directional training): Sets target to NaN.
+      Discarding ambiguous samples prevents inducing systematic bearish label bias.
+    - "stop_first": Assumes stop loss triggered first (-1.0). Reserved strictly for
+      conservative trade simulation / backtest PnL accounting, NOT for directional labeling.
+    - "overshoot" (legacy): Chooses barrier with larger overshoot beyond barrier price.
+    - If `df_ltf` (lower-timeframe OHLC, e.g. 1m or 5m) is provided, sequential tick/candle
+      order is evaluated directly to identify whether PT or SL was hit first chronologically.
     """
     df = df.copy()
     atr = df["atr_14"]
@@ -321,6 +329,7 @@ def add_tbm_target(
     
     labels = []
     ambiguous_count = 0
+    resolved_via_ltf = 0
 
     for i in range(len(df)):
         if i >= len(df) - horizon:
@@ -351,14 +360,37 @@ def add_tbm_target(
             elif hit_pt and hit_sl:
                 # Both hit in same candle
                 ambiguous_count += 1
-                if ambiguous_resolution == "stop_first":
-                    label = -1  # Conservative stop-first assumption
-                elif ambiguous_resolution == "exclude":
-                    label = np.nan
+                
+                # Check if lower-timeframe resolution is possible
+                if df_ltf is not None and not df_ltf.empty:
+                    bar_time = future_h.index[j]
+                    bar_delta = future_h.index[1] - future_h.index[0] if len(future_h) > 1 else pd.Timedelta("1h")
+                    sub = df_ltf.loc[(df_ltf.index >= bar_time) & (df_ltf.index < bar_time + bar_delta)]
+                    ltf_resolved = False
+                    for _, sub_row in sub.iterrows():
+                        sub_pt = sub_row["high"] >= p_pt
+                        sub_sl = sub_row["low"] <= p_sl
+                        if sub_pt and not sub_sl:
+                            label = 1
+                            ltf_resolved = True
+                            resolved_via_ltf += 1
+                            break
+                        elif sub_sl and not sub_pt:
+                            label = -1
+                            ltf_resolved = True
+                            resolved_via_ltf += 1
+                            break
+                    if ltf_resolved:
+                        break
+
+                if ambiguous_resolution == "exclude":
+                    label = np.nan  # Unbiased default: discard from training
+                elif ambiguous_resolution == "stop_first":
+                    label = -1  # Stop-first (for trade simulation only)
                 elif ambiguous_resolution == "overshoot":
                     label = 1 if (future_h.iloc[j] - p_pt) > (p_sl - future_l.iloc[j]) else -1
                 else:
-                    label = -1
+                    label = np.nan
                 break
         
         # If no barrier hit, use sign of horizon return
@@ -368,6 +400,14 @@ def add_tbm_target(
         labels.append(float(label) if not np.isnan(label) else np.nan)
         
     df["target"] = labels
+    if ambiguous_count > 0:
+        logger.info(
+            "TBM labeling: encountered %d ambiguous bars (both PT & SL breached in same candle). "
+            "Resolution: '%s' (discarded: %d, resolved via LTF: %d).",
+            ambiguous_count, ambiguous_resolution,
+            ambiguous_count - resolved_via_ltf if ambiguous_resolution == "exclude" else 0,
+            resolved_via_ltf,
+        )
     return df
 
 

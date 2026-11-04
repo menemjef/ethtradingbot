@@ -251,6 +251,135 @@ def split_train_val_purged(
     return (X_c_train, X_m_train, y_train), (X_c_val, X_m_val, y_val), meta
 
 
+
+
+def split_train_val_test_purged(
+    X_candle: np.ndarray,
+    X_market: np.ndarray,
+    y: np.ndarray,
+    train_ratio: float = 0.60,
+    val_ratio: float = 0.20,
+    test_ratio: float = 0.20,
+    purge_horizon: int = 12,
+) -> tuple:
+    """
+    Split time-series sliding windows into three strictly chronological partitions:
+    1. Training Partition: [0, train_end)
+       - Purged Boundary 1: [train_end, val_start) discarded
+    2. Validation/Calibration Partition: [val_start, val_end)
+       - Purged Boundary 2: [val_end, test_start) discarded
+    3. Untouched Final Test Partition: [test_start, N)
+       - Evaluated strictly out-of-sample once; no hyperparameter tuning or threshold optimization.
+    """
+    total = len(y)
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-5, "Ratios must sum to 1.0"
+
+    val_start = int(total * train_ratio)
+    test_start = int(total * (train_ratio + val_ratio))
+
+    train_end = max(0, val_start - purge_horizon)
+    val_end = max(val_start, test_start - purge_horizon)
+
+    train_slice = (X_candle[:train_end], X_market[:train_end], y[:train_end])
+    val_slice = (X_candle[val_start:val_end], X_market[val_start:val_end], y[val_start:val_end])
+    test_slice = (X_candle[test_start:], X_market[test_start:], y[test_start:])
+
+    meta = {
+        "total_windows": total,
+        "train_samples": len(train_slice[2]),
+        "val_samples": len(val_slice[2]),
+        "test_samples": len(test_slice[2]),
+        "train_purge_size": val_start - train_end,
+        "val_purge_size": test_start - val_end,
+        "train_indices": (0, train_end),
+        "val_indices": (val_start, val_end),
+        "test_indices": (test_start, total),
+        "purge_horizon": purge_horizon,
+    }
+    logger.info(
+        "3-Way Temporal Split with Purge: Total %d | Train: %d (purged %d) | Val: %d (purged %d) | Test: %d (untouched)",
+        total, len(train_slice[2]), meta["train_purge_size"], len(val_slice[2]), meta["val_purge_size"], len(test_slice[2]),
+    )
+    return train_slice, val_slice, test_slice, meta
+
+
+def generate_walk_forward_splits(
+    total_samples: int,
+    n_splits: int = 4,
+    train_ratio: float = 0.50,
+    test_ratio: float = 0.125,
+    purge_horizon: int = 12,
+    expanding: bool = True,
+) -> list:
+    """
+    Generate walk-forward cross-validation splits with purged boundaries.
+    Guarantees that every out-of-sample test partition is evaluated strictly on future data
+    separated by a purged horizon.
+    """
+    splits = []
+    test_size = int(total_samples * test_ratio)
+    init_train_size = int(total_samples * train_ratio)
+
+    for i in range(n_splits):
+        test_start = init_train_size + i * test_size
+        test_end = min(total_samples, test_start + test_size)
+        if test_start >= total_samples or (test_end - test_start) < purge_horizon:
+            break
+
+        train_start = 0 if expanding else (i * test_size)
+        train_end = max(train_start, test_start - purge_horizon)
+
+        splits.append({
+            "split_idx": i,
+            "train_indices": (train_start, train_end),
+            "test_indices": (test_start, test_end),
+            "train_count": train_end - train_start,
+            "test_count": test_end - test_start,
+            "purge_count": test_start - train_end,
+        })
+    return splits
+
+
+def block_bootstrap_confidence_interval(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metric_func,
+    block_size: int = 12,
+    n_bootstraps: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 42,
+) -> dict:
+    """
+    Moving block bootstrap for time series with overlapping targets (horizon = block_size).
+    Preserves autocorrelation structure when computing standard errors and confidence intervals.
+    """
+    rng = np.random.default_rng(seed)
+    N = len(y_true)
+    num_blocks = int(np.ceil(N / block_size))
+    bootstrap_metrics = []
+
+    for _ in range(n_bootstraps):
+        start_indices = rng.integers(0, max(1, N - block_size + 1), size=num_blocks)
+        indices = np.concatenate([np.arange(s, min(s + block_size, N)) for s in start_indices])[:N]
+        metric_val = metric_func(y_pred[indices], y_true[indices])
+        bootstrap_metrics.append(metric_val)
+
+    bootstrap_metrics = np.array(bootstrap_metrics)
+    point_est = metric_func(y_pred, y_true)
+    ci_lower = float(np.percentile(bootstrap_metrics, 100 * (alpha / 2)))
+    ci_upper = float(np.percentile(bootstrap_metrics, 100 * (1 - alpha / 2)))
+    std_err = float(np.std(bootstrap_metrics))
+
+    return {
+        "point_estimate": float(point_est),
+        "std_error": std_err,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "alpha": alpha,
+        "block_size": block_size,
+    }
+
+
 def prepare_live_window(
     df_raw: pd.DataFrame,
     scaler_candle: StandardScaler,
