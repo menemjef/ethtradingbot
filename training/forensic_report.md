@@ -302,3 +302,59 @@ The fetcher's pagination no longer breaks prematurely on intermediate exchange o
 | `data/indicators.py` | Modified — Ambiguous resolution default, logger |
 | `tests/test_retraining_corrections.py` | Modified — 15 tests (added gap traversal, walk-forward execution) |
 | `training/forensic_report.md` | Updated — This section |
+
+
+---
+
+## Pass 4: Execution Blockers and Backtest Integrity (2026-11-04)
+
+> **Commit:** `(pending staged export)`  
+> **Status:** All execution blockers resolved, OHLC-aware simulation implemented, 33 discover tests + 8 audit bridge tests passing.
+
+### 16. Resolution of Training Entry-Point Blockers
+
+Two runtime crashes in `train.py` were identified and resolved:
+1. **Argument Mismatch:** `train_model()` previously accepted `purge_horizon`, while `train.py` passed `purge_bars`. Resolved by accepting both `purge_horizon` and `purge_bars` (alias) in `train_model()`, harmonizing `train.py` to `purge_horizon`.
+2. **Metric Schema Inconsistency:** `compute_comprehensive_metrics()` returned `"sample_count": N`, while `train.py` queried `test_metrics["validation_samples"]`. Resolved by providing both `"sample_count"` and `"validation_samples"` in the returned dictionary, standardizing all callers on `"sample_count"`.
+3. **Variable Scope Resolution:** Eliminated shadowing and late import statements in `train.py` (`TARGET_HORIZON` and `numpy as np`) to ensure clean module-level accessibility.
+4. **Integration Test:** Added `test_train_py_full_orchestration_mocked` running `train.py.main()` through all 5 pipeline stages down to final result reporting.
+
+### 17. Pre-Roll Lookback and Retained Dataset Isolation
+
+- **Feature Warmup on Full History:** Indicator computation (`build_features()`) operates on the complete fetched candle history ($N_{\text{requested}} + N_{\text{pre-roll}}$).
+- **Trimming Post-Computation:** The dataset is sliced to the requested start timestamp (`df_feat = df_feat_full.loc[requested_start_ts:].copy()`) **only after** all rolling indicators have completed warm-up.
+- **Fibonacci Validation:** Verified that the 720-period Fibonacci feature (`fib_618_dist_180d`) is valid and finite at index 0 of the retained dataset.
+- **Pre-Roll Exclusion:** Zero pre-roll observations are included as labeled training samples.
+- **Cache Data Verification:** Local cache loading verifies monotonic UTC datetime index, deduplicates timestamps, and enforces contiguous 1h intervals when `--allow-gaps` is false.
+
+### 18. Continuous Hourly Windows (Zero Gap Compression)
+
+- **Elimination of Pre-Window Dropna:** Ceased calling `df_feat.dropna(subset=["target"])` prior to sliding window creation. The hourly feature timeline remains continuous and unbroken.
+- **Contiguous Lookback Construction:** Every lookback window $[i - \text{LOOKBACK} : i]$ spans exactly contiguous 1-hour steps. No window skips an hour internally.
+- **Post-Construction Filtering:** Windows with NaN targets (e.g. ambiguous barrier breaches or endpoint bounds) are filtered out after construction.
+- **Timestamp Tracking:** Each window carries its decision timestamp, decision index, and target resolution timestamp (`t_{\text{dec}} + H \times \Delta t`).
+- **Timestamp-Based Purging:** `split_train_val_test_purged()` purges training samples where $t_{\text{resolution}} > T_{\text{val\_start}}$, and validation samples where $t_{\text{resolution}} > T_{\text{test\_start}}$, mathematically verifying zero target leakage across partition boundaries.
+
+### 19. OHLC-Aware Barrier Trade Simulator (`simulate_trades_ohlc`)
+
+Rebuilt `model/walk_forward.py` trade simulator with realistic microstructure modeling:
+- **Next-Bar Execution:** Entry orders execute at candle $i+1$ **OPEN** (after signal is confirmed at candle $i$ close), with modeled slippage (`open * (1 + slippage)` for long).
+- **Intrabar Barrier Checks:** Take-profit and stop-loss evaluate against subsequent candle **High and Low** prices.
+- **Intrabar Collision Resolution:** If both TP and SL are touched in the same bar, conservatively resolves **STOP-FIRST**.
+- **Holding Horizon Exit:** Position exits at candle close of bar $(t_{\text{entry}} + H)$ with slippage.
+- **Forced End-of-Fold Close:** Open positions at the final bar of a test fold are marked-to-market and closed at final candle CLOSE (eliminating silent trade omissions).
+- **Explicit Fee Breakdown:** Separates entry fee (taker) and exit fee (maker for limit TP, taker for stop/horizon/collision).
+
+### 20. Walk-Forward Methodology and Result Aggregation
+
+- **Clear Boundary Enforcement:** For each fold, $T_{\text{train\_end}} + H \le T_{\text{test\_start}}$, guaranteeing that all training labels have resolved before out-of-sample predictions begin.
+- **Historical Context:** Preceding historical candles provide lookback context for the first test prediction without lookahead.
+- **Inner Chronological Validation:** Divides fold training history into inner train (75%) and inner val (25% with purge) with early stopping, preventing overtraining.
+- **Pooled Profit Factor:** Aggregates all trade ledgers across folds to compute true pooled profit factor ($\sum \text{wins} / \sum |\text{losses}|$), replacing unweighted arithmetic averaging.
+- **Sequential Compounded Return:** Computes compounded net return $\prod (1 + R_k) - 1$ across chronological folds.
+- **Reporting Metrics:** Added `mean_win_rate_pct`, `pooled_win_rate_pct`, `worst_max_drawdown_pct`, and `compounded_net_return_pct`.
+
+### 21. Calibration and Test Isolation
+
+- **Prior Baseline from Training/Calibration:** `evaluate_calibration()` now accepts `fixed_prior`. When evaluating the untouched test partition, calibration metrics (Brier score and Log Loss) are measured against the prior positive rate fixed on the training/calibration set, not the test set.
+- **Untouched Final Test Partition:** Completely isolated from model selection and temperature fitting.

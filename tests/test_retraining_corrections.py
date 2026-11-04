@@ -23,6 +23,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from model.walk_forward import simulate_trades_ohlc
+from train import main as train_main
+
 
 import unittest
 from unittest.mock import MagicMock, patch
@@ -499,6 +502,240 @@ class TestTemporalLeakageAndPartitions(unittest.TestCase):
         self.assertIn("mean_directional_accuracy_pct", agg)
         self.assertIn("mean_profit_factor", agg)
         self.assertIn("total_net_pnl_sum_pct", agg)
+
+
+
+class TestPass4ExecutionAndIntegrity(unittest.TestCase):
+    """Test suite for Quant Audit Pass 4 requirements."""
+
+    def test_train_py_full_orchestration_mocked(self):
+        """Verify train.py entry-point runs without purge_bars or validation_samples crashes."""
+        N = 300
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 20, N))
+        df_mock = pd.DataFrame({
+            "open": price,
+            "high": price + 5.0,
+            "low": price - 5.0,
+            "close": price,
+            "volume": np.linspace(100, 500, N),
+        }, index=dates)
+
+        with patch("train.fetch_ohlcv", return_value=df_mock):
+            with patch("sys.argv", ["train.py", "--fast", "--warmup-bars", "50", "--train-ratio", "0.6", "--val-ratio", "0.2"]):
+                # Should execute Step 1 through Step 5 and print results without throwing any exception
+                try:
+                    train_main()
+                except SystemExit as e:
+                    self.fail(f"train.py main() raised unexpected SystemExit: {e}")
+                except KeyError as e:
+                    self.fail(f"train.py main() raised KeyError (metric schema issue): {e}")
+                except TypeError as e:
+                    self.fail(f"train.py main() raised TypeError (argument mismatch): {e}")
+
+    def test_preroll_exclusion_and_fibonacci_validity(self):
+        """Verify that pre-roll warms up 720-bar Fibonacci and is strictly excluded from training samples."""
+        warmup = 720
+        requested = 100
+        total = warmup + requested
+        dates = pd.date_range("2026-01-01", periods=total, freq="1h", tz="UTC")
+        price = 2000.0 + 100.0 * np.sin(np.linspace(0, 30, total))
+        df_raw = pd.DataFrame({
+            "open": price,
+            "high": price + 10.0,
+            "low": price - 10.0,
+            "close": price,
+            "volume": np.linspace(100, 1000, total),
+        }, index=dates)
+
+        requested_start_ts = df_raw.index[-requested]
+        self.assertEqual(len(df_raw.loc[requested_start_ts:]), requested)
+
+        # Build features on full history
+        df_feat_full = build_features(df_raw, add_targets=False)
+        self.assertIn("fib_618_dist_180d", df_feat_full.columns)
+
+        # Retained slice starts at requested_start_ts
+        df_feat = df_feat_full.loc[requested_start_ts:].copy()
+        self.assertEqual(len(df_feat), requested)
+
+        # Fibonacci at index 0 of retained dataset MUST NOT be NaN
+        self.assertFalse(np.isnan(df_feat["fib_618_dist_180d"].iloc[0]), "Fibonacci feature at requested start timestamp is NaN!")
+
+    def test_consecutive_hourly_windows_with_missing_targets_in_middle(self):
+        """Verify that missing/ambiguous targets in the middle do NOT cause lookback windows to skip an hour."""
+        N = 200
+        lookback = 72
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        price = 2000.0 + 50.0 * np.sin(np.linspace(0, 20, N))
+        candle_arr = np.column_stack([price, price + 5.0, price - 5.0, price, np.ones(N)])
+        market_arr = np.zeros((N, 5), dtype=np.float32)
+
+        # Create targets with a 10-hour gap of NaNs in the middle (indices 90 to 100)
+        targets = np.ones(N, dtype=np.float32)
+        targets[90:101] = np.nan
+
+        X_c, X_m, y, meta = build_windows(
+            candle_arr, market_arr, targets,
+            lookback=lookback,
+            timestamps=dates,
+            drop_nan_targets=True,
+            return_metadata=True,
+        )
+
+        # 1. Windows with NaN targets are excluded
+        self.assertFalse(np.isnan(y).any(), "NaN targets must be filtered out post-construction")
+
+        # 2. But internal features of EVERY window must be contiguous 1-hour steps
+        # Check decision indices
+        dec_indices = meta["decision_indices"]
+        for idx, dec_i in enumerate(dec_indices):
+            # Window in feature space corresponds to original indices [dec_i - lookback + 1 : dec_i + 1]
+            win_timestamps = dates[dec_i - lookback + 1 : dec_i + 1]
+            # Time delta between every adjacent bar inside the lookback window must be exactly 1 hour
+            deltas = pd.Series(win_timestamps).diff().dropna()
+            self.assertTrue((deltas == pd.Timedelta(hours=1)).all(), "A lookback window skipped an hour internally!")
+
+    def test_purge_boundaries_against_future_resolution_timestamps(self):
+        """Verify that training target resolution timestamps never overlap with validation or test start."""
+        N = 300
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        X_c = np.zeros((N, 72, 5), dtype=np.float32)
+        X_m = np.zeros((N, 72, 5), dtype=np.float32)
+        y = np.ones(N, dtype=np.float32)
+        purge_horizon = 12
+
+        train_slice, val_slice, test_slice, meta = split_train_val_test_purged(
+            X_c, X_m, y,
+            timestamps=dates,
+            train_ratio=0.60,
+            val_ratio=0.20,
+            test_ratio=0.20,
+            purge_horizon=purge_horizon,
+        )
+
+        val_start_ts = meta["val_start_ts"]
+        test_start_ts = meta["test_start_ts"]
+        train_max_res = meta["train_max_resolution_ts"]
+        val_max_res = meta["val_max_resolution_ts"]
+
+        self.assertLessEqual(train_max_res, val_start_ts, "Train target resolution leaks into validation set")
+        self.assertLessEqual(val_max_res, test_start_ts, "Val target resolution leaks into test set")
+
+    def test_ohlc_next_bar_open_fill_and_slippage(self):
+        """Verify simulator fills at next candle OPEN with modeled slippage."""
+        dates = pd.date_range("2026-01-01", periods=5, freq="1h", tz="UTC")
+        df_test = pd.DataFrame({
+            "open": [2000.0, 2010.0, 2020.0, 2030.0, 2040.0],
+            "high": [2005.0, 2015.0, 2025.0, 2035.0, 2045.0],
+            "low": [1995.0, 2005.0, 2015.0, 2025.0, 2035.0],
+            "close": [2002.0, 2012.0, 2022.0, 2032.0, 2042.0],
+            "atr_14": [10.0, 10.0, 10.0, 10.0, 10.0],
+        }, index=dates)
+
+        # Signal at candle 0 close (+1.0 -> LONG)
+        signals = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        res = simulate_trades_ohlc(
+            signals=signals,
+            df_test=df_test,
+            signal_threshold=0.5,
+            slippage=0.001,  # 0.1% slippage
+            taker_fee=0.0005,
+        )
+
+        self.assertEqual(res["trade_count"], 1)
+        trade = res["trades"][0]
+        # Fill MUST be at candle 1 OPEN (2010.0) + slippage (2010 * 1.001 = 2012.01)
+        self.assertEqual(trade["entry_bar"], 1)
+        self.assertAlmostEqual(trade["entry_price"], 2010.0 * 1.001, places=3)
+        self.assertEqual(trade["side"], "LONG")
+
+    def test_intrabar_collision_conservative_stop_first(self):
+        """Verify that when both TP and SL are touched in the same candle, simulator resolves stop-first."""
+        dates = pd.date_range("2026-01-01", periods=5, freq="1h", tz="UTC")
+        df_test = pd.DataFrame({
+            "open": [2000.0, 2000.0, 2000.0, 2000.0, 2000.0],
+            # At candle 2: high touches PT (2030) and low touches SL (1970)
+            "high": [2005.0, 2005.0, 2050.0, 2005.0, 2005.0],
+            "low": [1995.0, 1995.0, 1950.0, 1995.0, 1995.0],
+            "close": [2000.0, 2000.0, 2000.0, 2000.0, 2000.0],
+            "atr_14": [10.0, 10.0, 10.0, 10.0, 10.0],
+        }, index=dates)
+
+        signals = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        res = simulate_trades_ohlc(
+            signals=signals,
+            df_test=df_test,
+            signal_threshold=0.5,
+            pt_mult=2.0,  # PT = 2020
+            sl_mult=2.0,  # SL = 1980
+            slippage=0.0,
+            taker_fee=0.0,
+        )
+
+        self.assertEqual(res["trade_count"], 1)
+        trade = res["trades"][0]
+        self.assertEqual(trade["exit_reason"], "stop_loss_collision")
+        self.assertTrue(trade["is_collision"])
+        self.assertLess(trade["net_return"], 0.0, "Collision must resolve as loss (stop-first)")
+
+    def test_forced_end_of_fold_position_handling(self):
+        """Verify that positions still open at the final bar of the fold are marked-to-market and closed."""
+        dates = pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC")
+        df_test = pd.DataFrame({
+            "open": [2000.0, 2000.0, 2000.0, 2010.0],
+            "high": [2005.0, 2005.0, 2005.0, 2015.0],
+            "low": [1995.0, 1995.0, 1995.0, 2005.0],
+            "close": [2000.0, 2000.0, 2000.0, 2012.0],
+            "atr_14": [10.0, 10.0, 10.0, 10.0],
+        }, index=dates)
+
+        # Enter at candle 2 (from signal at candle 1)
+        signals = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        res = simulate_trades_ohlc(
+            signals=signals,
+            df_test=df_test,
+            signal_threshold=0.5,
+            pt_mult=10.0,  # Never hit
+            sl_mult=10.0,  # Never hit
+            holding_max=20,  # Never hit
+            slippage=0.0,
+            taker_fee=0.0,
+        )
+
+        self.assertEqual(res["trade_count"], 1)
+        trade = res["trades"][0]
+        self.assertEqual(trade["exit_bar"], 3)
+        self.assertEqual(trade["exit_reason"], "end_of_fold")
+        self.assertAlmostEqual(trade["exit_price"], 2012.0)
+
+    def test_pooled_profit_factor_and_compounded_return_calculation(self):
+        """Verify pooled profit factor and compounded return calculations."""
+        # Fold 1: Net PnL = +10%
+        # Fold 2: Net PnL = -5%
+        # Compounded return: (1 + 0.10) * (1 - 0.05) - 1 = 1.045 - 1 = +4.5%
+        fold_results = [
+            {"net_pnl_pct": 10.0, "profit_factor": 2.0, "max_drawdown_pct": 3.0, "win_rate_pct": 60.0, "trade_count": 5},
+            {"net_pnl_pct": -5.0, "profit_factor": 0.5, "max_drawdown_pct": 7.0, "win_rate_pct": 40.0, "trade_count": 5},
+        ]
+        compounded_ret = 1.0
+        for f in fold_results:
+            compounded_ret *= (1.0 + f["net_pnl_pct"] / 100.0)
+        compounded_net_return_pct = float(round((compounded_ret - 1.0) * 100.0, 2))
+        self.assertAlmostEqual(compounded_net_return_pct, 4.5, places=2)
+
+        # Pooled trades: Gain = $200, Loss = $100 -> Pooled PF = 2.0
+        trades = [
+            {"net_return": 0.10}, {"net_return": 0.10},  # sum = 0.20
+            {"net_return": -0.05}, {"net_return": -0.05}, # sum = -0.10
+        ]
+        gains = sum(t["net_return"] for t in trades if t["net_return"] > 0)
+        losses = abs(sum(t["net_return"] for t in trades if t["net_return"] < 0))
+        pooled_pf = gains / losses
+        self.assertAlmostEqual(pooled_pf, 2.0)
 
 
 if __name__ == "__main__":

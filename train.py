@@ -1,3 +1,4 @@
+import numpy as np
 """
 train.py — Full training pipeline entry point.
 
@@ -173,6 +174,25 @@ def main():
         df_raw = pd.read_csv(args.use_cache, index_col=0, parse_dates=True)
         if df_raw.index.tz is None:
             df_raw.index = df_raw.index.tz_localize('UTC')
+        else:
+            df_raw.index = df_raw.index.tz_convert('UTC')
+        df_raw = df_raw.sort_index()
+        dup_count = int(df_raw.index.duplicated().sum())
+        if dup_count > 0:
+            logger.warning("Detected %d duplicate timestamps in cache. Deduplicating.", dup_count)
+            df_raw = df_raw[~df_raw.index.duplicated(keep="last")]
+        if len(df_raw) > 1 and not args.allow_gaps:
+            expected_range = pd.date_range(start=df_raw.index[0], end=df_raw.index[-1], freq="1h")
+            missing = expected_range.difference(df_raw.index)
+            if len(missing) > 0:
+                raise ValueError(
+                    f"Cache data integrity failure: Detected {len(missing)} missing intervals "
+                    f"between {df_raw.index[0]} and {df_raw.index[-1]}"
+                )
+        if len(df_raw) > limit:
+            requested_start_ts = df_raw.index[-limit]
+        else:
+            requested_start_ts = df_raw.index[0]
     else:
         logger.info("Step 1/5 — Fetching %d x %s candles for %s (warmup_bars: %d)", limit, TIMEFRAME, SYMBOL, args.warmup_bars)
         df_raw = fetch_ohlcv(
@@ -182,6 +202,8 @@ def main():
             warmup_bars=args.warmup_bars,
             raise_on_gap=not args.allow_gaps,
         )
+        requested_start_ts = df_raw.index[-limit] if len(df_raw) >= limit else df_raw.index[0]
+
     logger.info("Raw data shape: %s | Date range: %s -> %s",
                 df_raw.shape, df_raw.index[0], df_raw.index[-1])
 
@@ -203,26 +225,47 @@ def main():
         logger.info("WALK-FORWARD EVALUATION COMPLETE:")
         agg = wf_results["aggregate_summary"]
         logger.info("  Mean Directional Accuracy: %.2f%% (std: %.2f%%)", agg["mean_directional_accuracy_pct"], agg["std_directional_accuracy_pct"])
-        logger.info("  Mean Win Rate:            %.2f%%", agg.get("mean_win_rate_pct", 0.0))
-        logger.info("  Overall Profit Factor:    %.2f", agg["mean_profit_factor"])
-        logger.info("  Total Net Return:         %+.2f%%", agg["total_net_pnl_sum_pct"])
+        logger.info("  Mean Trade Win Rate:      %.2f%% (Pooled: %.2f%%)", agg.get("mean_win_rate_pct", 0.0), agg.get("pooled_win_rate_pct", 0.0))
+        logger.info("  Pooled Profit Factor:     %.2f (Fold Mean: %.2f)", agg.get("pooled_profit_factor", 0.0), agg.get("mean_profit_factor", 0.0))
+        logger.info("  Compounded Net Return:    %+.2f%% (Sum: %+.2f%%)", agg.get("compounded_net_return_pct", 0.0), agg["total_net_pnl_sum_pct"])
         logger.info("  Worst Max Drawdown:       %.2f%%", agg.get("worst_max_drawdown_pct", 0.0))
+        logger.info("  Total Out-of-Sample Trades: %d", agg.get("total_trades_all_folds", 0))
         logger.info("=" * 60)
         return
 
     # ── 2. Compute indicators & target ───────────────────────────────────────
     # STEP 2: Turn raw candles into mathematical indicators (RSI, MACD, etc)
-    # These become the "features" the AI will learn from.
-    logger.info("Step 2/5 — Computing technical indicators (TBM)")
-    df_feat = build_features(df_raw, add_targets=False)
+    # Compute features on the COMPLETE fetched history (including pre-roll bars)
+    # so that rolling indicators (e.g. 720-period Fibonacci) are fully warmed up.
+    logger.info("Step 2/5 — Computing technical indicators on complete history (%d bars)", len(df_raw))
+    df_feat_full = build_features(df_raw, add_targets=False)
     
     # Apply Triple Barrier Labeling
-    # This creates the "Target" (what the AI tries to predict). It simulates 
-    # taking a trade and seeing if it hits Profit Target (PT) or Stop Loss (SL).
-    df_feat = add_tbm_target(df_feat, TBM_PT_MULT, TBM_SL_MULT, TARGET_HORIZON, ambiguous_resolution=args.ambiguous_resolution)
-    df_feat = df_feat.dropna(subset=["target"])
-    
-    logger.info("Feature data shape: %s", df_feat.shape)
+    df_feat_full = add_tbm_target(
+        df_feat_full,
+        TBM_PT_MULT,
+        TBM_SL_MULT,
+        TARGET_HORIZON,
+        ambiguous_resolution=args.ambiguous_resolution,
+    )
+
+    # Retain the requested training date range ONLY AFTER feature computation:
+    df_feat = df_feat_full.loc[requested_start_ts:].copy()
+
+    # Ensure the 720-period Fibonacci feature is valid at the beginning of retained dataset
+    if "fib_618_dist_180d" in df_feat.columns:
+        first_fib = df_feat["fib_618_dist_180d"].iloc[0]
+        if np.isnan(first_fib):
+            raise ValueError(
+                f"Fibonacci feature at requested start timestamp ({requested_start_ts}) is NaN! "
+                f"Ensure pre-roll warmup_bars ({args.warmup_bars}) >= 720."
+            )
+
+    logger.info(
+        "Retained Dataset Range: %s -> %s (%d continuous hourly bars). "
+        "Pre-roll observations (%d bars) strictly excluded from training samples.",
+        df_feat.index[0], df_feat.index[-1], len(df_feat), len(df_raw) - len(df_feat),
+    )
 
     if len(df_feat) < LOOKBACK + 50:
         logger.error(
@@ -234,7 +277,6 @@ def main():
 
     # ── 3. Fit & save scalers ────────────────────────────────────────────────
     # STEP 3: Fit scalers ONLY on training partition to prevent lookahead leakage
-    from config import TARGET_HORIZON
     train_end_idx = int(len(df_feat) * args.train_ratio)
     purged_train_end = max(0, train_end_idx - TARGET_HORIZON)
     df_train = df_feat.iloc[:purged_train_end]
@@ -254,18 +296,26 @@ def main():
     scaler_candle, scaler_market = fit_and_save_scalers(df_train)
 
     # ── 4. Build sliding windows ─────────────────────────────────────────────
-    # STEP 4: The AI needs to see a "window" of time (e.g. 5 days of history) 
-    # to predict the next move. We chop the data into overlapping windows.
-    logger.info("Step 4/5 — Building sliding-window dataset")
+    # STEP 4: Build continuous lookback windows on unbroken hourly features.
+    # Exclude windows with invalid/NaN targets post-construction so that no window skips an hour.
+    logger.info("Step 4/5 — Building continuous sliding-window dataset")
     from config import CANDLE_FEATURES, MARKET_FEATURES
-    import numpy as np
 
     candle_arr, market_arr = transform(df_feat, scaler_candle, scaler_market)
     targets = df_feat["target"].values.astype("float32")
 
-    X_candle, X_market, y = build_windows(candle_arr, market_arr, targets)
+    X_candle, X_market, y, window_meta = build_windows(
+        candle_arr,
+        market_arr,
+        targets,
+        lookback=LOOKBACK,
+        timestamps=df_feat.index,
+        purge_horizon=TARGET_HORIZON,
+        drop_nan_targets=True,
+        return_metadata=True,
+    )
     logger.info(
-        "Windows built | X_candle: %s | X_market: %s | y: %s",
+        "Continuous Windows built | X_candle: %s | X_market: %s | y: %s (Filtered NaN targets post-construction)",
         X_candle.shape, X_market.shape, y.shape,
     )
 
@@ -275,12 +325,14 @@ def main():
     logger.info("Step 5/5 — Training HybridModel with 3-Way Purged Partitioning")
     model, results = train_model(
         X_candle, X_market, y,
+        timestamps=window_meta["decision_timestamps"],
+        resolution_timestamps=window_meta["resolution_timestamps"],
         pos_weight_mode=args.pos_weight_mode,
         checkpoint_metric=args.checkpoint_metric,
         use_three_way_split=True,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
-        purge_bars=TARGET_HORIZON,
+        purge_horizon=TARGET_HORIZON,
     )
 
     val_metrics = results["validation_metrics"]
@@ -320,7 +372,7 @@ def main():
 
         tf = test_metrics["threshold_filtered"]
         logger.info("  Threshold (|pred| >= %.4f) Passing:    %d/%d (%.2f%%) | Winrate: %.2f%%",
-                    tf["threshold"], tf["samples_passing"], test_metrics["validation_samples"], tf["pct_passing"], tf["trading_signal_accuracy"] * 100)
+                    tf["threshold"], tf["samples_passing"], test_metrics["sample_count"], tf["pct_passing"], tf["trading_signal_accuracy"] * 100)
 
         if unc_res and "block_evaluations" in unc_res:
             logger.info("-" * 60)

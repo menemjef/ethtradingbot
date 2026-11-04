@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from sklearn.preprocessing import StandardScaler
+from typing import Optional, Any, Tuple, List, Dict
 
 import config
 from config import (
@@ -167,31 +168,69 @@ def build_windows(
     market_arr: np.ndarray,
     targets: np.ndarray,
     lookback: int = LOOKBACK,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    timestamps: Optional[Any] = None,
+    purge_horizon: int = TARGET_HORIZON,
+    drop_nan_targets: bool = True,
+    return_metadata: bool = False,
+) -> tuple:
     """
-    Construct sliding lookback windows.
+    Construct continuous sliding lookback windows across unbroken hourly features.
+
+    Preserves continuous hourly feature timeline:
+    Lookback windows [i - lookback : i] are built on continuous rows.
+    If drop_nan_targets=True, windows where targets[i - 1] is NaN are filtered OUT
+    after window construction, ensuring that internal lookback windows NEVER skip an hour.
 
     Returns:
-        X_candle: (N_windows, lookback, candle_dim)
-        X_market: (N_windows, lookback, market_dim)
-        y:        (N_windows,)
+        If return_metadata is False:
+            (X_candle, X_market, y)
+        If return_metadata is True:
+            (X_candle, X_market, y, window_meta)
+            where window_meta contains decision_timestamps, decision_indices, resolution_timestamps.
     """
     N = len(candle_arr)
     assert N == len(market_arr) == len(targets), "Array length mismatch"
 
     X_candle, X_market, y = [], [], []
+    dec_indices = []
+    dec_timestamps = []
+    res_timestamps = []
+
+    has_ts = timestamps is not None and len(timestamps) == N
+
     for i in range(lookback, N):
+        dec_idx = i - 1
+        target_val = targets[dec_idx]
+
+        if drop_nan_targets and np.isnan(target_val):
+            continue
+
         X_candle.append(candle_arr[i - lookback:i])
         X_market.append(market_arr[i - lookback:i])
-        # FIX: The feature window ends at index `i - 1`. 
-        # The target for a trade taken at the close of `i - 1` is `targets[i - 1]`.
-        y.append(targets[i - 1])
+        y.append(target_val)
+        dec_indices.append(dec_idx)
 
-    return (
-        np.array(X_candle, dtype=np.float32),
-        np.array(X_market, dtype=np.float32),
-        np.array(y, dtype=np.float32),
-    )
+        if has_ts:
+            t = timestamps[dec_idx]
+            dec_timestamps.append(t)
+            if hasattr(t, "__add__"):
+                res_timestamps.append(t + pd.Timedelta(hours=purge_horizon))
+            else:
+                res_timestamps.append(t)
+
+    X_c_arr = np.array(X_candle, dtype=np.float32)
+    X_m_arr = np.array(X_market, dtype=np.float32)
+    y_arr = np.array(y, dtype=np.float32)
+
+    if return_metadata:
+        meta = {
+            "decision_indices": np.array(dec_indices, dtype=int),
+            "decision_timestamps": pd.DatetimeIndex(dec_timestamps) if has_ts else np.array(dec_timestamps),
+            "resolution_timestamps": pd.DatetimeIndex(res_timestamps) if has_ts else np.array(res_timestamps),
+        }
+        return X_c_arr, X_m_arr, y_arr, meta
+
+    return X_c_arr, X_m_arr, y_arr
 
 
 def split_train_val_purged(
@@ -204,25 +243,6 @@ def split_train_val_purged(
     """
     Split time-series sliding windows into training and validation sets
     with strict temporal leakage prevention (purge/embargo).
-
-    Purge Logic:
-    A sample at index `k` has a target derived from price action extending up to `k + purge_horizon`.
-    If the validation set begins at index `split_idx`, any training sample within the window
-    `[split_idx - purge_horizon, split_idx)` has a target that overlaps with prices observed
-    during the validation set.
-    Purging removes these `purge_horizon` boundary samples from the training set,
-    guaranteeing that NO training target incorporates future information from the validation timeline.
-
-    Returns:
-        (X_candle_train, X_market_train, y_train),
-        (X_candle_val, X_market_val, y_val),
-        metadata: {
-            "total_windows": int,
-            "split_idx": int,
-            "purge_size": int,
-            "train_samples": int,
-            "val_samples": int,
-        }
     """
     total = len(y)
     split_idx = int(total * train_split)
@@ -251,8 +271,6 @@ def split_train_val_purged(
     return (X_c_train, X_m_train, y_train), (X_c_val, X_m_val, y_val), meta
 
 
-
-
 def split_train_val_test_purged(
     X_candle: np.ndarray,
     X_market: np.ndarray,
@@ -261,6 +279,8 @@ def split_train_val_test_purged(
     val_ratio: float = 0.20,
     test_ratio: float = 0.20,
     purge_horizon: int = 12,
+    timestamps: Optional[Any] = None,
+    resolution_timestamps: Optional[Any] = None,
 ) -> tuple:
     """
     Split time-series sliding windows into three strictly chronological partitions:
@@ -270,6 +290,10 @@ def split_train_val_test_purged(
        - Purged Boundary 2: [val_end, test_start) discarded
     3. Untouched Final Test Partition: [test_start, N)
        - Evaluated strictly out-of-sample once; no hyperparameter tuning or threshold optimization.
+
+    Timestamp-based purging:
+    If timestamps is provided, purges any training window whose target resolution timestamp
+    exceeds val_start_ts, and any validation window whose target resolution exceeds test_start_ts.
     """
     total = len(y)
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-5, "Ratios must sum to 1.0"
@@ -277,8 +301,48 @@ def split_train_val_test_purged(
     val_start = int(total * train_ratio)
     test_start = int(total * (train_ratio + val_ratio))
 
-    train_end = max(0, val_start - purge_horizon)
-    val_end = max(val_start, test_start - purge_horizon)
+    if timestamps is not None and len(timestamps) == total:
+        ts_arr = pd.DatetimeIndex(timestamps) if not isinstance(timestamps, pd.DatetimeIndex) else timestamps
+        if resolution_timestamps is not None and len(resolution_timestamps) == total:
+            res_ts = pd.DatetimeIndex(resolution_timestamps) if not isinstance(resolution_timestamps, pd.DatetimeIndex) else resolution_timestamps
+        else:
+            res_ts = ts_arr + pd.Timedelta(hours=purge_horizon)
+
+        val_start_ts = ts_arr[val_start]
+        test_start_ts = ts_arr[test_start]
+
+        # Purge Train: all train decision windows must have resolution <= val_start_ts
+        train_mask = (res_ts[:val_start] <= val_start_ts)
+        valid_train_idx = np.where(train_mask)[0]
+        train_end = int(valid_train_idx[-1] + 1) if len(valid_train_idx) > 0 else 0
+
+        # Purge Val: all val decision windows must have resolution <= test_start_ts
+        val_mask = (res_ts[val_start:test_start] <= test_start_ts)
+        valid_val_idx = np.where(val_mask)[0]
+        val_end = int(val_start + valid_val_idx[-1] + 1) if len(valid_val_idx) > 0 else val_start
+
+        # Verification assertion: zero target leakage across boundaries
+        if train_end > 0:
+            max_train_res = res_ts[:train_end].max()
+            assert max_train_res <= val_start_ts, f"Temporal leakage: train label resolves at {max_train_res} > val start {val_start_ts}"
+        if val_end > val_start:
+            max_val_res = res_ts[val_start:val_end].max()
+            assert max_val_res <= test_start_ts, f"Temporal leakage: val label resolves at {max_val_res} > test start {test_start_ts}"
+
+        ts_meta = {
+            "train_start_ts": ts_arr[0] if train_end > 0 else None,
+            "train_end_ts": ts_arr[train_end - 1] if train_end > 0 else None,
+            "val_start_ts": val_start_ts,
+            "val_end_ts": ts_arr[val_end - 1] if val_end > val_start else None,
+            "test_start_ts": test_start_ts,
+            "test_end_ts": ts_arr[-1] if total > test_start else None,
+            "train_max_resolution_ts": res_ts[:train_end].max() if train_end > 0 else None,
+            "val_max_resolution_ts": res_ts[val_start:val_end].max() if val_end > val_start else None,
+        }
+    else:
+        train_end = max(0, val_start - purge_horizon)
+        val_end = max(val_start, test_start - purge_horizon)
+        ts_meta = {}
 
     train_slice = (X_candle[:train_end], X_market[:train_end], y[:train_end])
     val_slice = (X_candle[val_start:val_end], X_market[val_start:val_end], y[val_start:val_end])
@@ -295,6 +359,7 @@ def split_train_val_test_purged(
         "val_indices": (val_start, val_end),
         "test_indices": (test_start, total),
         "purge_horizon": purge_horizon,
+        **ts_meta,
     }
     logger.info(
         "3-Way Temporal Split with Purge: Total %d | Train: %d (purged %d) | Val: %d (purged %d) | Test: %d (untouched)",

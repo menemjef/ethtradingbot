@@ -126,6 +126,7 @@ def compute_comprehensive_metrics(
 
     metrics = {
         "sample_count": N,
+        "validation_samples": N,
         "trading_signal_directional_accuracy": trading_signal_acc,
         "regression_directional_accuracy": reg_dir_acc,
         "classification_directional_accuracy": clf_dir_acc,
@@ -177,6 +178,8 @@ def train_model(
     X_candle: np.ndarray,
     X_market: np.ndarray,
     y: np.ndarray,
+    timestamps: Optional[Any] = None,
+    resolution_timestamps: Optional[Any] = None,
     device: str = "auto",
     pos_weight_mode: str = "balanced",
     label_smoothing: float = 0.0,
@@ -186,6 +189,7 @@ def train_model(
     val_ratio: float = 0.20,
     test_ratio: float = 0.20,
     purge_horizon: int = TARGET_HORIZON,
+    purge_bars: Optional[int] = None,
 ) -> Tuple[HybridModel, Dict[str, Any]]:
     """
     Production-integrated training pipeline with:
@@ -196,6 +200,9 @@ def train_model(
     5. Untouched Test evaluated only after model parameters are frozen.
     6. Moving block bootstrap uncertainty estimation across multiple block sizes [12, 24, 48, 168].
     """
+    if purge_bars is not None:
+        purge_horizon = purge_bars
+
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Training on device: %s", device)
@@ -204,6 +211,8 @@ def train_model(
     if use_three_way_split:
         (X_c_tr, X_m_tr, y_tr), (X_c_va, X_m_va, y_va), (X_c_te, X_m_te, y_te), split_meta = split_train_val_test_purged(
             X_candle, X_market, y,
+            timestamps=timestamps,
+            resolution_timestamps=resolution_timestamps,
             train_ratio=train_ratio,
             val_ratio=val_ratio,
             test_ratio=test_ratio,
@@ -451,7 +460,8 @@ def train_model(
 
         # Apply the frozen temperature parameter fitted on calibration partition
         te_cal_probs = 1.0 / (1.0 + np.exp(-np.clip(te_clf_np / fitted_t, -30.0, 30.0)))
-        test_cal_eval = evaluate_calibration(te_cal_probs, (te_y_np > 0).astype(int))
+        val_prior = float(np.mean((val_y_np > 0).astype(int)))
+        test_cal_eval = evaluate_calibration(te_cal_probs, (te_y_np > 0).astype(int), fixed_prior=val_prior)
         test_metrics["calibrated_with_val_temperature"] = test_cal_eval
         test_metrics["temperature_applied"] = fitted_t
 
