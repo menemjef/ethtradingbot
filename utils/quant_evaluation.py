@@ -9,6 +9,7 @@ Features:
 """
 
 import math
+import itertools
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Tuple, Optional
@@ -16,6 +17,40 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, precision_score,
     recall_score, f1_score, confusion_matrix, brier_score_loss, log_loss
 )
+
+
+def calculate_actual_stop_position_sizing(
+    account_equity: float,
+    entry_price: float,
+    stop_price: float,
+    risk_pct: float = 0.025,
+    max_leverage: float = 3.0,
+    min_stop_pct: float = 0.005
+) -> Dict[str, float]:
+    """
+    Position sizing based on ACTUAL stop loss distance:
+    RiskDollar = account_equity * risk_pct
+    StopDistancePct = max(min_stop_pct, abs(entry_price - stop_price) / entry_price)
+    Notional = min(RiskDollar / StopDistancePct, account_equity * max_leverage)
+    EffectiveLeverage = Notional / account_equity
+    """
+    if account_equity <= 0 or entry_price <= 0:
+        return {"notional": 0.0, "position_size": 0.0, "effective_leverage": 0.0, "stop_distance_pct": 0.0}
+
+    stop_dist = max(min_stop_pct, abs(entry_price - stop_price) / entry_price) if stop_price > 0 else min_stop_pct
+    risk_dollar = account_equity * risk_pct
+    notional_raw = risk_dollar / stop_dist
+    notional = min(notional_raw, account_equity * max_leverage)
+    pos_size = notional / entry_price
+    eff_lev = notional / account_equity
+
+    return {
+        "notional": float(notional),
+        "position_size": float(pos_size),
+        "effective_leverage": float(eff_lev),
+        "stop_distance_pct": float(stop_dist)
+    }
+
 
 
 def compute_aligned_predictive_metrics(
@@ -130,7 +165,8 @@ def compute_reconciled_trade_metrics(
     block_size: int = 5,
     n_bootstraps: int = 2000,
     n_trials: int = 1,
-    seed: int = 42
+    seed: int = 42,
+    calendar_duration_years: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Computes all standard trading and risk metrics directly from individual trade records.
@@ -200,12 +236,21 @@ def compute_reconciled_trade_metrics(
     max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
 
     # Levered account simulation (2.5% risk budget, 3x leverage cap)
+    # Uses actual trade stop loss distance when available in trade record
     account_eq = initial_capital
     peak_eq = initial_capital
     max_acc_dd = 0.0
 
-    for r in net_rets:
-        position_exposure = min(account_eq * (risk_pct / sl_distance_assumed), account_eq * max_leverage)
+    for idx, r in enumerate(net_rets):
+        tr_rec = trades[idx] if idx < len(trades) else {}
+        if "actual_stop_distance_pct" in tr_rec and tr_rec["actual_stop_distance_pct"] > 0:
+            tr_sl_dist = tr_rec["actual_stop_distance_pct"]
+        elif "sl_distance_pct" in tr_rec and tr_rec["sl_distance_pct"] > 0:
+            tr_sl_dist = tr_rec["sl_distance_pct"]
+        else:
+            tr_sl_dist = sl_distance_assumed
+
+        position_exposure = min(account_eq * (risk_pct / tr_sl_dist), account_eq * max_leverage)
         pnl = position_exposure * r
         account_eq += pnl
         if account_eq > peak_eq:
@@ -244,9 +289,12 @@ def compute_reconciled_trade_metrics(
     n_gap = int(exit_reasons.str.contains("gap").sum())
     n_horiz = int(exit_reasons.str.startswith("horizon").sum())
 
-    # Annualized return & Sharpe (assuming 8760 hours per year)
-    total_hours = float(df_tr["holding_bars"].sum()) if "holding_bars" in df_tr else n_trades * 8.0
-    years = max(0.1, total_hours / 8760.0)
+    # Annualized return & Sharpe (using calendar duration when provided, else holding time)
+    if calendar_duration_years is not None and calendar_duration_years > 0:
+        years = max(0.01, float(calendar_duration_years))
+    else:
+        total_hours = float(df_tr["holding_bars"].sum()) if "holding_bars" in df_tr else n_trades * 8.0
+        years = max(0.1, total_hours / 8760.0)
     ann_ret = float((compounded_mult ** (1.0 / years) - 1.0) * 100.0) if compounded_mult > 0 else -100.0
 
     # Sharpe ratio (annualized per-trade basis)
@@ -360,3 +408,272 @@ def compute_deflated_sharpe_ratio(
     # Standard normal CDF approximation (error function)
     dsr = 0.5 * (1.0 + math.erf(z_stat / math.sqrt(2.0)))
     return float(np.clip(dsr, 0.0, 1.0))
+
+
+def compute_continuous_portfolio_metrics(
+    hourly_equity: pd.Series,
+    trades: List[Dict[str, Any]],
+    n_trials: int = 1,
+    block_hours: int = 168,
+    n_bootstraps: int = 2000,
+    seed: int = 42
+) -> Dict[str, Any]:
+    """
+    Computes rigorous continuous portfolio equity metrics on hourly mark-to-market data:
+    1. Calendar CAGR (based on actual elapsed calendar years).
+    2. Continuous Mark-to-Market Maximum Drawdown (intratrade hourly fidelity).
+    3. Continuous Daily & Hourly Sharpe and Sortino ratios.
+    4. Calendar Monthly return distribution & 30% monthly target evaluation.
+    5. Moving Block Bootstrap on hourly return time series (Kunsch 1989).
+    6. Deflated Sharpe Ratio with multi-trial penalty K.
+    """
+    if len(hourly_equity) < 2:
+        return {"error": "Insufficient hourly equity observations"}
+
+    eq = hourly_equity.values.astype(np.float64)
+    timestamps = hourly_equity.index
+
+    t_start = pd.Timestamp(timestamps[0])
+    t_end = pd.Timestamp(timestamps[-1])
+    cal_days = max(1.0, (t_end - t_start).total_seconds() / 86400.0)
+    cal_years = max(0.01, cal_days / 365.25)
+
+    initial_eq = eq[0]
+    final_eq = eq[-1]
+    compounded_mult = final_eq / initial_eq
+    net_return_pct = (compounded_mult - 1.0) * 100.0
+    cagr_pct = float((compounded_mult ** (1.0 / cal_years) - 1.0) * 100.0) if compounded_mult > 0 else -100.0
+
+    # Hourly returns
+    eq_prev = np.where(eq[:-1] == 0, 1e-6, eq[:-1])
+    h_rets = (eq[1:] - eq_prev) / eq_prev
+    valid_h = ~np.isnan(h_rets) & ~np.isinf(h_rets)
+    h_rets = h_rets[valid_h]
+
+    # Continuous Intratrade Mark-to-Market Drawdown
+    peaks = np.maximum.accumulate(eq)
+    drawdowns = (peaks - eq) / peaks * 100.0
+    max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+
+    # Drawdown duration & recovery time
+    dd_streak = 0
+    max_dd_streak_hours = 0
+    underwater = eq < peaks
+    for u in underwater:
+        if u:
+            dd_streak += 1
+            max_dd_streak_hours = max(max_dd_streak_hours, dd_streak)
+        else:
+            dd_streak = 0
+
+    # Hourly Sharpe
+    h_std = float(np.std(h_rets)) if len(h_rets) > 1 else 1e-6
+    hourly_sharpe = float((np.mean(h_rets) / h_std) * np.sqrt(8760.0)) if h_std > 0 else 0.0
+
+    # Daily resampled returns (calendar 00:00 UTC)
+    df_eq = pd.DataFrame({"equity": eq}, index=timestamps)
+    daily_eq = df_eq["equity"].resample("1D").last().dropna()
+    d_vals = daily_eq.values
+    if len(d_vals) > 1:
+        d_rets = (d_vals[1:] - d_vals[:-1]) / np.where(d_vals[:-1] == 0, 1e-6, d_vals[:-1])
+        d_std = float(np.std(d_rets)) if len(d_rets) > 1 else 1e-6
+        daily_sharpe = float((np.mean(d_rets) / d_std) * np.sqrt(365.25)) if d_std > 0 else 0.0
+
+        down_rets = d_rets[d_rets < 0]
+        down_std = float(np.std(down_rets)) if len(down_rets) > 1 else 1e-6
+        daily_sortino = float((np.mean(d_rets) / down_std) * np.sqrt(365.25)) if down_std > 0 else 0.0
+    else:
+        daily_sharpe = 0.0
+        daily_sortino = 0.0
+
+    calmar = float(cagr_pct / max_dd) if max_dd > 0 else 0.0
+
+    # Monthly Returns & Target 30% Assessment
+    monthly_eq = df_eq["equity"].resample("1ME").last().dropna()
+    monthly_rets_dict = {}
+    m_vals = monthly_eq.values
+    m_dates = [ts.strftime("%Y-%m") for ts in monthly_eq.index]
+    
+    if len(m_vals) > 0:
+        prev_m = initial_eq
+        for m_date, m_val in zip(m_dates, m_vals):
+            m_ret = ((m_val - prev_m) / prev_m) * 100.0 if prev_m > 0 else 0.0
+            monthly_rets_dict[m_date] = round(float(m_ret), 2)
+            prev_m = m_val
+
+    m_list = list(monthly_rets_dict.values())
+    if len(m_list) > 0:
+        avg_monthly = float(np.mean(m_list))
+        med_monthly = float(np.median(m_list))
+        std_monthly = float(np.std(m_list))
+        pct_profitable_months = float((np.array(m_list) > 0).mean()) * 100.0
+        best_month = float(np.max(m_list))
+        worst_month = float(np.min(m_list))
+
+        # Max consecutive losing months
+        curr_loss_m = 0
+        max_loss_m = 0
+        for mr in m_list:
+            if mr < 0:
+                curr_loss_m += 1
+                max_loss_m = max(max_loss_m, curr_loss_m)
+            else:
+                curr_loss_m = 0
+
+        # Rolling 3-month and 6-month compounded returns
+        r3m = []
+        for i in range(len(m_list) - 2):
+            w = [1.0 + x / 100.0 for x in m_list[i:i+3]]
+            r3m.append((float(np.prod(w)) - 1.0) * 100.0)
+        avg_3m_rolling = float(np.mean(r3m)) if r3m else 0.0
+
+        r6m = []
+        for i in range(len(m_list) - 5):
+            w = [1.0 + x / 100.0 for x in m_list[i:i+6]]
+            r6m.append((float(np.prod(w)) - 1.0) * 100.0)
+        avg_6m_rolling = float(np.mean(r6m)) if r6m else 0.0
+    else:
+        avg_monthly = med_monthly = std_monthly = pct_profitable_months = best_month = worst_month = 0.0
+        max_loss_m = 0
+        avg_3m_rolling = avg_6m_rolling = 0.0
+
+    target_30pct_met = (med_monthly >= 30.0) and (avg_monthly >= 30.0) and (pct_profitable_months >= 70.0)
+    shortfall_bps = round((30.0 - med_monthly) * 100.0, 1)
+
+    # Deflated Sharpe Ratio
+    dsr = compute_deflated_sharpe_ratio(
+        observed_sharpe=daily_sharpe,
+        returns=h_rets,
+        track_record_len=len(h_rets),
+        n_trials=n_trials
+    )
+
+    # Chronological Time-Series Moving Block Bootstrap on hourly returns
+    rng = np.random.default_rng(seed)
+    n_h = len(h_rets)
+    n_blocks = max(1, n_h // block_hours)
+    offsets = np.arange(block_hours)
+    boot_cagrs = []
+    boot_sharpes = []
+    boot_dds = []
+
+    for _ in range(n_bootstraps):
+        starts = rng.integers(0, max(1, n_h - block_hours + 1), size=n_blocks)
+        b_idx = (starts[:, None] + offsets[None, :]).ravel()[:n_h]
+        b_rets = h_rets[b_idx]
+        b_cum = np.cumprod(1.0 + b_rets)
+        b_final = b_cum[-1] if len(b_cum) > 0 else 1.0
+        b_cagr = (b_final ** (1.0 / cal_years) - 1.0) * 100.0 if b_final > 0 else -100.0
+        b_peaks = np.maximum.accumulate(b_cum)
+        b_dd = float(np.max((b_peaks - b_cum) / b_peaks * 100.0)) if len(b_cum) > 0 else 0.0
+        b_std = float(np.std(b_rets)) if len(b_rets) > 1 else 1e-6
+        b_sr = (float(np.mean(b_rets)) / b_std) * np.sqrt(8760.0) if b_std > 0 else 0.0
+
+        boot_cagrs.append(b_cagr)
+        boot_sharpes.append(b_sr)
+        boot_dds.append(b_dd)
+
+    ci_cagr = [round(float(np.percentile(boot_cagrs, 2.5)), 2), round(float(np.percentile(boot_cagrs, 97.5)), 2)]
+    ci_sharpe = [round(float(np.percentile(boot_sharpes, 2.5)), 3), round(float(np.percentile(boot_sharpes, 97.5)), 3)]
+    ci_max_dd = [round(float(np.percentile(boot_dds, 2.5)), 2), round(float(np.percentile(boot_dds, 97.5)), 2)]
+
+    # Trade-level statistics
+    trade_metrics = compute_reconciled_trade_metrics(
+        trades=trades,
+        initial_capital=initial_eq,
+        n_trials=n_trials,
+        calendar_duration_years=cal_years
+    )
+
+    return {
+        "calendar_start": str(t_start),
+        "calendar_end": str(t_end),
+        "calendar_days": round(cal_days, 1),
+        "calendar_years": round(cal_years, 3),
+        "initial_equity": round(initial_eq, 2),
+        "final_equity": round(final_eq, 2),
+        "net_compounded_return_pct": round(net_return_pct, 2),
+        "calendar_cagr_pct": round(cagr_pct, 2),
+        "ci_95_cagr_pct": ci_cagr,
+        "intratrade_max_drawdown_pct": round(max_dd, 2),
+        "ci_95_max_drawdown_pct": ci_max_dd,
+        "max_drawdown_duration_hours": int(max_dd_streak_hours),
+        "hourly_sharpe": round(hourly_sharpe, 3),
+        "daily_sharpe": round(daily_sharpe, 3),
+        "ci_95_hourly_sharpe": ci_sharpe,
+        "daily_sortino": round(daily_sortino, 3),
+        "calmar_ratio": round(calmar, 3),
+        "deflated_sharpe_ratio": round(dsr, 4),
+        "monthly_metrics": {
+            "average_monthly_return_pct": round(avg_monthly, 2),
+            "median_monthly_return_pct": round(med_monthly, 2),
+            "std_monthly_return_pct": round(std_monthly, 2),
+            "pct_profitable_months": round(pct_profitable_months, 2),
+            "best_month_pct": round(best_month, 2),
+            "worst_month_pct": round(worst_month, 2),
+            "max_consecutive_losing_months": int(max_loss_m),
+            "rolling_3m_average_return_pct": round(avg_3m_rolling, 2),
+            "rolling_6m_average_return_pct": round(avg_6m_rolling, 2),
+            "target_30pct_monthly_achieved": bool(target_30pct_met),
+            "shortfall_to_30pct_monthly_bps": float(shortfall_bps),
+            "monthly_returns_breakdown": monthly_rets_dict
+        },
+        "trade_summary": trade_metrics
+    }
+
+
+def compute_probability_of_backtest_overfitting(
+    equity_matrix: pd.DataFrame,
+    n_splits: int = 16
+) -> float:
+    """
+    Computes Probability of Backtest Overfitting (PBO) via Combinatorially Symmetric
+    Cross-Validation (CSCV) following Bailey, Borwein, Lopez de Prado, Zhu (2016).
+    equity_matrix: columns are candidate strategy equity curves, index is chronological timestamps.
+    """
+    if equity_matrix.empty or equity_matrix.shape[1] < 2 or len(equity_matrix) < n_splits * 2:
+        return 0.0
+
+    T, N = equity_matrix.shape
+    slice_len = T // n_splits
+    # Compute slice returns for each strategy
+    slice_returns = np.zeros((n_splits, N))
+    vals = equity_matrix.values
+    for s in range(n_splits):
+        start_idx = s * slice_len
+        end_idx = (s + 1) * slice_len - 1 if s < n_splits - 1 else T - 1
+        start_val = vals[start_idx]
+        end_val = vals[end_idx]
+        slice_returns[s, :] = (end_val - start_val) / np.where(start_val == 0, 1e-6, start_val)
+
+    # Half splits: choose n_splits // 2
+    half_s = n_splits // 2
+    all_combos = list(itertools.combinations(range(n_splits), half_s))
+    max_combos = min(200, len(all_combos))
+    combos_to_eval = all_combos[:max_combos]
+
+    rank_losses = 0
+    total_evals = 0
+
+    for is_idx in combos_to_eval:
+        is_set = set(is_idx)
+        oos_idx = [i for i in range(n_splits) if i not in is_set]
+
+        # In-sample aggregate performance
+        is_perf = np.mean(slice_returns[list(is_idx), :], axis=0)
+        best_is_strategy = int(np.argmax(is_perf))
+
+        # Out-of-sample aggregate performance
+        oos_perf = np.mean(slice_returns[oos_idx, :], axis=0)
+        oos_ranks = np.argsort(np.argsort(-oos_perf)) # 0 is best
+        rank_best = oos_ranks[best_is_strategy]
+
+        # Overfitting occurred if in-sample winner ranks below median out-of-sample
+        median_rank = N / 2.0
+        if rank_best > median_rank:
+            rank_losses += 1
+        total_evals += 1
+
+    pbo = float(rank_losses / total_evals) if total_evals > 0 else 0.0
+    return round(pbo, 4)
+
