@@ -1,0 +1,62 @@
+{
+  "repository": "menemjef/ethtradingbot",
+  "working_branch": "fix/execution-safety-and-backtest-integrity",
+  "base_branch": "chatgpt-audit-review",
+  "python_version": "3.10.6",
+  "torch_version": "2.6.0+cu124",
+  "system": "Windows-10-10.0.26200-SP0",
+  "random_seeds": {
+    "torch": 42,
+    "numpy": 42,
+    "python": 42
+  },
+  "datasets": {
+    "eth_usdt_1h_3yr": {
+      "path": "data/cache/eth_usdt_1h_3yr.parquet",
+      "sha256": "ffdbd16de69264f197ec83246501d0b2cbfcc244c8373eb11102ad629afaa1d7",
+      "bars": 32720,
+      "start": "2023-02-10 11:00:00+00:00",
+      "end": "2026-11-04 18:00:00+00:00"
+    },
+    "eth_funding_3yr": {
+      "path": "data/cache/eth_funding_3yr.parquet",
+      "sha256": "d741ec495653e23507c45bf9ca827e58e0377738879d42a269e5c6730937cc91",
+      "records": 4090,
+      "start": "2023-02-10 16:00:00.020000+00:00",
+      "end": "2026-11-04 16:00:00.001000+00:00"
+    }
+  },
+  "checkpoints_and_scalers": {
+    "baseline_model_pt": {
+      "path": "baseline_pre_retrain/best_model.pt",
+      "sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+      "status": "VALID_PRESERVED_BASELINE"
+    },
+    "baseline_scaler_candle_pkl": {
+      "path": "baseline_pre_retrain/scaler_candle.pkl",
+      "sha256": "d5e5e30533e3ad133dd9385a5d84f3c0793c96ec91d1b7db12e97722a19bb19c",
+      "status": "VALID_PRESERVED_BASELINE"
+    },
+    "baseline_scaler_market_pkl": {
+      "path": "baseline_pre_retrain/scaler_market.pkl",
+      "sha256": "d7bc7ebdc32810f1c65eb6ad51273cccb380cf20882e0513fa009e0387390e2d",
+      "status": "VALID_PRESERVED_BASELINE"
+    },
+    "pass_4_checkpoint_pt": {
+      "path": "checkpoints/best_model.pt",
+      "sha256": "0dfa18e77e5afaafa94f12ad239ba80379a418f77569ccd50aa261b1328789f2",
+      "status": "INELIGIBLE_OVERWRITTEN_IN_PASS_4_TEST"
+    }
+  },
+  "execution_cost_conventions": {
+    "taker_fee_entry": 0.0005,
+    "taker_fee_exit": 0.0005,
+    "slippage_entry": 0.0003,
+    "slippage_exit": 0.0003,
+    "funding_settlement": "Binance USD-M 8-hour historical rates (00:00, 08:00, 16:00 UTC)",
+    "intrabar_collision": "STOP-FIRST conservative resolution",
+    "minimum_order_notional_usd": 21.0
+  },
+  "reproduction_command": "python scratch/run_strategy_research.py",
+  "generated_at": "2026-11-04T19:41:25.376991+00:00"
+}

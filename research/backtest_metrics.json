@@ -20,138 +20,144 @@
     "leverage_assumed": 3,
     "risk_per_trade_percent": 2.5,
     "active_checkpoint_hash": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
-    "generated_at": "2026-11-04T19:05:18.634202+00:00"
+    "alignment_correction": "Decision at candle j-1 evaluates strictly against target[j-1]",
+    "generated_at": "2026-11-04T19:39:55.913976+00:00"
   },
   "aggregate": {
     "HybridModel": {
       "predictive": {
-        "total_oos_samples": 2792,
-        "weighted_directional_accuracy_pct": 53.3,
-        "weighted_regression_mse": 0.989142
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 53.34,
+        "weighted_regression_mse": 0.989594
       },
       "trading": {
         "total_trades": 59,
         "long_trades": 59,
         "short_trades": 0,
         "win_rate_pct": 47.46,
-        "gross_profit_pct": 25.34,
-        "gross_loss_pct": 40.29,
-        "profit_factor": 0.629,
-        "average_trade_return_pct": -0.2533,
+        "gross_profit_pct": 25.4,
+        "gross_loss_pct": 40.26,
+        "profit_factor": 0.631,
+        "average_trade_return_pct": -0.2519,
         "median_trade_return_pct": -0.2258,
-        "expectancy_bps": -25.33,
-        "compounded_net_return_pct": -14.27,
-        "account_equity_levered_return_pct": -23.05,
-        "max_drawdown_pct": 10.75,
+        "expectancy_bps": -25.19,
+        "ci_95_expectancy_bps": [
+          -61.44,
+          -0.1
+        ],
+        "compounded_net_return_pct": -14.21,
+        "annualized_return_pct": -78.4,
+        "account_equity_levered_return_pct": -22.94,
+        "max_drawdown_pct": 19.0,
+        "account_max_drawdown_pct": 29.92,
+        "sharpe_ratio": -5.004,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -11.112,
+        "calmar_ratio": -4.126,
         "average_holding_duration_hours": 6.9,
+        "max_consecutive_losses": 5,
         "fee_costs_pct": 5.9,
         "slippage_costs_pct": 3.54,
-        "funding_costs_pct": 0.1295,
+        "funding_costs_pct": 0.0499,
         "stop_loss_exits": 26,
         "take_profit_exits": 18,
         "collision_exits": 0,
         "opening_gap_exits": 0,
+        "horizon_exits": 15,
         "unclosed_invalid_trades": 0
       }
     },
     "GradientBoosting": {
       "predictive": {
-        "total_oos_samples": 2792,
-        "weighted_directional_accuracy_pct": 50.32,
-        "weighted_regression_mse": 1.341213
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 49.68,
+        "weighted_regression_mse": 1.383778
       },
       "trading": {
         "total_trades": 376,
         "long_trades": 173,
         "short_trades": 203,
         "win_rate_pct": 43.62,
-        "gross_profit_pct": 162.85,
-        "gross_loss_pct": 235.0,
+        "gross_profit_pct": 162.9,
+        "gross_loss_pct": 235.02,
         "profit_factor": 0.693,
-        "average_trade_return_pct": -0.1919,
-        "median_trade_return_pct": -0.2304,
-        "expectancy_bps": -19.19,
-        "compounded_net_return_pct": -52.73,
+        "average_trade_return_pct": -0.1918,
+        "median_trade_return_pct": -0.2305,
+        "expectancy_bps": -19.18,
+        "ci_95_expectancy_bps": [
+          -30.16,
+          -8.41
+        ],
+        "compounded_net_return_pct": -52.72,
+        "annualized_return_pct": -93.45,
         "account_equity_levered_return_pct": -72.19,
-        "max_drawdown_pct": 25.35,
+        "max_drawdown_pct": 55.38,
+        "account_max_drawdown_pct": 75.01,
+        "sharpe_ratio": -5.913,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -10.92,
+        "calmar_ratio": -1.687,
         "average_holding_duration_hours": 6.4,
+        "max_consecutive_losses": 7,
         "fee_costs_pct": 37.6,
         "slippage_costs_pct": 22.56,
-        "funding_costs_pct": -0.0981,
+        "funding_costs_pct": -0.1242,
         "stop_loss_exits": 144,
         "take_profit_exits": 123,
         "collision_exits": 1,
         "opening_gap_exits": 0,
-        "unclosed_invalid_trades": 0
-      }
-    },
-    "LogisticRegression": {
-      "predictive": {
-        "total_oos_samples": 2792,
-        "weighted_directional_accuracy_pct": 44.27,
-        "weighted_regression_mse": 1.004478
-      },
-      "trading": {
-        "total_trades": 338,
-        "long_trades": 71,
-        "short_trades": 267,
-        "win_rate_pct": 39.64,
-        "gross_profit_pct": 139.43,
-        "gross_loss_pct": 230.38,
-        "profit_factor": 0.605,
-        "average_trade_return_pct": -0.2691,
-        "median_trade_return_pct": -0.4208,
-        "expectancy_bps": -26.91,
-        "compounded_net_return_pct": -60.77,
-        "account_equity_levered_return_pct": -79.58,
-        "max_drawdown_pct": 25.95,
-        "average_holding_duration_hours": 6.3,
-        "fee_costs_pct": 33.8,
-        "slippage_costs_pct": 20.28,
-        "funding_costs_pct": -0.9302,
-        "stop_loss_exits": 138,
-        "take_profit_exits": 100,
-        "collision_exits": 1,
-        "opening_gap_exits": 0,
+        "horizon_exits": 107,
         "unclosed_invalid_trades": 0
       }
     },
     "MajorityBaseline": {
       "predictive": {
-        "total_oos_samples": 2792,
-        "weighted_directional_accuracy_pct": 54.01,
-        "weighted_regression_mse": 0.985254
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 54.06,
+        "weighted_regression_mse": 0.985941
       },
       "trading": {
         "total_trades": 380,
         "long_trades": 380,
         "short_trades": 0,
-        "win_rate_pct": 0.0,
-        "gross_profit_pct": 0.0,
-        "gross_loss_pct": 0.0,
-        "profit_factor": 0.0,
-        "average_trade_return_pct": 0.0,
-        "median_trade_return_pct": 0.0,
-        "expectancy_bps": 0.0,
-        "compounded_net_return_pct": -36.51,
-        "account_equity_levered_return_pct": -54.54,
-        "max_drawdown_pct": 25.83,
-        "average_holding_duration_hours": 0.0,
-        "fee_costs_pct": 0.0,
-        "slippage_costs_pct": 0.0,
-        "funding_costs_pct": 0.0,
-        "stop_loss_exits": 0,
-        "take_profit_exits": 0,
-        "collision_exits": 0,
+        "win_rate_pct": 48.95,
+        "gross_profit_pct": 178.25,
+        "gross_loss_pct": 220.17,
+        "profit_factor": 0.81,
+        "average_trade_return_pct": -0.1103,
+        "median_trade_return_pct": -0.0306,
+        "expectancy_bps": -11.03,
+        "ci_95_expectancy_bps": [
+          -24.15,
+          0.37
+        ],
+        "compounded_net_return_pct": -36.05,
+        "annualized_return_pct": -80.29,
+        "account_equity_levered_return_pct": -53.99,
+        "max_drawdown_pct": 41.35,
+        "account_max_drawdown_pct": 60.02,
+        "sharpe_ratio": -3.398,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -6.443,
+        "calmar_ratio": -1.942,
+        "average_holding_duration_hours": 6.3,
+        "max_consecutive_losses": 6,
+        "fee_costs_pct": 38.0,
+        "slippage_costs_pct": 22.8,
+        "funding_costs_pct": 0.6868,
+        "stop_loss_exits": 134,
+        "take_profit_exits": 136,
+        "collision_exits": 1,
         "opening_gap_exits": 0,
+        "horizon_exits": 107,
         "unclosed_invalid_trades": 0
       }
     },
     "NoTrade": {
       "predictive": {
-        "total_oos_samples": 2792,
-        "weighted_directional_accuracy_pct": 45.99,
-        "weighted_regression_mse": 0.992837
+        "total_oos_samples": 0,
+        "weighted_directional_accuracy_pct": 50.0,
+        "weighted_regression_mse": 1.0
       },
       "trading": {
         "total_trades": 0,
@@ -164,10 +170,21 @@
         "average_trade_return_pct": 0.0,
         "median_trade_return_pct": 0.0,
         "expectancy_bps": 0.0,
+        "ci_95_expectancy_bps": [
+          0.0,
+          0.0
+        ],
         "compounded_net_return_pct": 0.0,
+        "annualized_return_pct": 0.0,
         "account_equity_levered_return_pct": 0.0,
         "max_drawdown_pct": 0.0,
+        "account_max_drawdown_pct": 0.0,
+        "sharpe_ratio": 0.0,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": 0.0,
+        "calmar_ratio": 0.0,
         "average_holding_duration_hours": 0.0,
+        "max_consecutive_losses": 0,
         "fee_costs_pct": 0.0,
         "slippage_costs_pct": 0.0,
         "funding_costs_pct": 0.0,
@@ -175,6 +192,7 @@
         "take_profit_exits": 0,
         "collision_exits": 0,
         "opening_gap_exits": 0,
+        "horizon_exits": 0,
         "unclosed_invalid_trades": 0
       }
     }
@@ -187,256 +205,194 @@
         "train_end": "2026-07-10 22:00:00+00:00",
         "test_start": "2026-07-11 11:00:00+00:00",
         "test_end": "2026-08-09 06:00:00+00:00",
-        "test_candles": 692
+        "test_candles": 692,
+        "eval_samples": 691
       },
       "models": {
         "HybridModel": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 49.28,
+            "n_samples": 691,
+            "directional_accuracy_pct": 49.35,
             "ci_95_directional_accuracy": [
-              40.92,
+              40.77,
               57.44
             ],
-            "balanced_accuracy_pct": 47.05,
+            "balanced_accuracy_pct": 47.15,
             "precision_pct": 52.03,
-            "recall_pct": 75.6,
-            "f1_score": 0.6164,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                59,
-                260
-              ],
-              [
-                91,
-                282
-              ]
+            "recall_pct": 75.81,
+            "f1_score": 0.6171,
+            "regression_mse": 0.995958,
+            "ci_95_regression_mse": [
+              0.9846,
+              1.0082
             ],
-            "regression_mse": 0.9961,
+            "regression_mae": 0.997291,
             "zero_baseline_mse": 1.0,
-            "brier_score": 0.326,
-            "log_loss": 0.9582,
-            "ece": 0.2667
+            "brier_score": 0.2666,
+            "log_loss": 0.7309,
+            "ece": 0.1415
           },
           "trading": {
             "total_trades": 5,
             "long_trades": 5,
             "short_trades": 0,
             "win_rate_pct": 60.0,
-            "gross_profit_pct": 3.38,
+            "gross_profit_pct": 3.4,
             "gross_loss_pct": 1.63,
-            "profit_factor": 2.078,
-            "average_trade_return_pct": 0.3509,
-            "median_trade_return_pct": 0.3616,
-            "expectancy_bps": 35.09,
-            "compounded_net_return_pct": 1.74,
-            "max_drawdown_pct": 1.78,
+            "profit_factor": 2.087,
+            "average_trade_return_pct": 0.3536,
+            "median_trade_return_pct": 0.3683,
+            "expectancy_bps": 35.36,
+            "ci_95_expectancy_bps": [
+              35.36,
+              35.36
+            ],
+            "compounded_net_return_pct": 1.75,
+            "annualized_return_pct": 18.94,
+            "account_equity_levered_return_pct": 2.9,
+            "max_drawdown_pct": 1.4,
+            "account_max_drawdown_pct": 2.34,
+            "sharpe_ratio": 2.262,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 4.255,
+            "calmar_ratio": 13.518,
             "average_holding_duration_hours": 8.4,
             "max_consecutive_losses": 1,
             "fee_costs_pct": 0.5,
             "slippage_costs_pct": 0.3,
-            "funding_costs_pct": 0.0201,
+            "funding_costs_pct": 0.0062,
             "stop_loss_exits": 1,
             "take_profit_exits": 2,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": 2.87,
-            "account_max_drawdown_pct": 2.34
+            "horizon_exits": 2,
+            "unclosed_invalid_trades": 0
           }
         },
         "GradientBoosting": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 48.12,
+            "n_samples": 691,
+            "directional_accuracy_pct": 46.74,
             "ci_95_directional_accuracy": [
-              38.91,
-              57.29
+              37.8,
+              55.81
             ],
-            "balanced_accuracy_pct": 50.65,
-            "precision_pct": 55.74,
-            "recall_pct": 18.23,
-            "f1_score": 0.2747,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                265,
-                54
-              ],
-              [
-                305,
-                68
-              ]
+            "balanced_accuracy_pct": 49.22,
+            "precision_pct": 51.64,
+            "recall_pct": 16.94,
+            "f1_score": 0.2551,
+            "regression_mse": 1.514753,
+            "ci_95_regression_mse": [
+              1.2617,
+              1.7577
             ],
-            "regression_mse": 1.46713,
+            "regression_mae": 1.075801,
             "zero_baseline_mse": 1.0,
-            "brier_score": 0.3905,
-            "log_loss": 1.2518,
-            "ece": 0.3275
+            "brier_score": 0.5176,
+            "log_loss": 6.1149,
+            "ece": 0.5173
           },
           "trading": {
             "total_trades": 85,
             "long_trades": 12,
             "short_trades": 73,
             "win_rate_pct": 40.0,
-            "gross_profit_pct": 29.99,
-            "gross_loss_pct": 50.79,
-            "profit_factor": 0.59,
-            "average_trade_return_pct": -0.2448,
-            "median_trade_return_pct": -0.3839,
-            "expectancy_bps": -24.48,
-            "compounded_net_return_pct": -19.17,
-            "max_drawdown_pct": 20.47,
+            "gross_profit_pct": 29.97,
+            "gross_loss_pct": 50.84,
+            "profit_factor": 0.589,
+            "average_trade_return_pct": -0.2455,
+            "median_trade_return_pct": -0.3897,
+            "expectancy_bps": -24.55,
+            "ci_95_expectancy_bps": [
+              -48.93,
+              0.97
+            ],
+            "compounded_net_return_pct": -19.23,
+            "annualized_return_pct": -88.18,
+            "account_equity_levered_return_pct": -30.32,
+            "max_drawdown_pct": 19.03,
+            "account_max_drawdown_pct": 30.86,
+            "sharpe_ratio": -6.931,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -13.92,
+            "calmar_ratio": -4.635,
             "average_holding_duration_hours": 7.1,
             "max_consecutive_losses": 7,
             "fee_costs_pct": 8.5,
             "slippage_costs_pct": 5.1,
-            "funding_costs_pct": -0.1849,
+            "funding_costs_pct": -0.1205,
             "stop_loss_exits": 32,
             "take_profit_exits": 23,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -30.24,
-            "account_max_drawdown_pct": 30.81
-          }
-        },
-        "LogisticRegression": {
-          "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 46.1,
-            "ci_95_directional_accuracy": [
-              37.12,
-              56.26
-            ],
-            "balanced_accuracy_pct": 50.0,
-            "precision_pct": 0.0,
-            "recall_pct": 0.0,
-            "f1_score": 0.0,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                319,
-                0
-              ],
-              [
-                373,
-                0
-              ]
-            ],
-            "regression_mse": 1.008942,
-            "zero_baseline_mse": 1.0,
-            "brier_score": 0.5159,
-            "log_loss": 3.1541,
-            "ece": 0.5193
-          },
-          "trading": {
-            "total_trades": 85,
-            "long_trades": 0,
-            "short_trades": 85,
-            "win_rate_pct": 38.82,
-            "gross_profit_pct": 30.51,
-            "gross_loss_pct": 50.78,
-            "profit_factor": 0.601,
-            "average_trade_return_pct": -0.2386,
-            "median_trade_return_pct": -0.3897,
-            "expectancy_bps": -23.86,
-            "compounded_net_return_pct": -18.75,
-            "max_drawdown_pct": 19.24,
-            "average_holding_duration_hours": 7.1,
-            "max_consecutive_losses": 9,
-            "fee_costs_pct": 8.5,
-            "slippage_costs_pct": 5.1,
-            "funding_costs_pct": -0.2653,
-            "stop_loss_exits": 32,
-            "take_profit_exits": 23,
-            "collision_exits": 0,
-            "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -29.62,
-            "account_max_drawdown_pct": 30.05
+            "horizon_exits": 30,
+            "unclosed_invalid_trades": 0
           }
         },
         "MajorityBaseline": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 53.9,
+            "n_samples": 691,
+            "directional_accuracy_pct": 53.84,
             "ci_95_directional_accuracy": [
-              45.31,
-              62.73
+              44.79,
+              63.1
             ],
             "balanced_accuracy_pct": 50.0,
-            "precision_pct": 53.9,
+            "precision_pct": 53.84,
             "recall_pct": 100.0,
-            "f1_score": 0.7005,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                0,
-                319
-              ],
-              [
-                0,
-                373
-              ]
+            "f1_score": 0.6999,
+            "regression_mse": 0.994128,
+            "ci_95_regression_mse": [
+              0.9645,
+              1.0231
             ],
-            "regression_mse": 0.993914,
+            "regression_mae": 0.993864,
             "zero_baseline_mse": 1.0,
-            "brier_score": 0.461,
-            "log_loss": 6.3687,
-            "ece": 0.461
+            "brier_score": 0.3348,
+            "log_loss": 0.9225,
+            "ece": 0.2937
           },
           "trading": {
             "total_trades": 88,
             "long_trades": 88,
             "short_trades": 0,
             "win_rate_pct": 51.14,
-            "gross_profit_pct": 37.25,
-            "gross_loss_pct": 45.58,
-            "profit_factor": 0.817,
-            "average_trade_return_pct": -0.0947,
-            "median_trade_return_pct": 0.0396,
-            "expectancy_bps": -9.47,
-            "compounded_net_return_pct": -8.46,
-            "max_drawdown_pct": 11.98,
+            "gross_profit_pct": 37.31,
+            "gross_loss_pct": 45.51,
+            "profit_factor": 0.82,
+            "average_trade_return_pct": -0.0932,
+            "median_trade_return_pct": 0.0425,
+            "expectancy_bps": -9.32,
+            "ci_95_expectancy_bps": [
+              -33.2,
+              11.14
+            ],
+            "compounded_net_return_pct": -8.34,
+            "annualized_return_pct": -58.13,
+            "account_equity_levered_return_pct": -13.99,
+            "max_drawdown_pct": 11.5,
+            "account_max_drawdown_pct": 18.75,
+            "sharpe_ratio": -2.601,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -4.976,
+            "calmar_ratio": -5.055,
             "average_holding_duration_hours": 6.9,
             "max_consecutive_losses": 5,
             "fee_costs_pct": 8.8,
             "slippage_costs_pct": 5.28,
-            "funding_costs_pct": 0.2653,
+            "funding_costs_pct": 0.1363,
             "stop_loss_exits": 28,
             "take_profit_exits": 32,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -14.18,
-            "account_max_drawdown_pct": 18.87
+            "horizon_exits": 27,
+            "unclosed_invalid_trades": 0
           }
         },
         "NoTrade": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 46.1,
-            "ci_95_directional_accuracy": [
-              37.12,
-              55.29
-            ],
-            "balanced_accuracy_pct": 50.0,
-            "precision_pct": 0.0,
-            "recall_pct": 0.0,
-            "f1_score": 0.0,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                319,
-                0
-              ],
-              [
-                373,
-                0
-              ]
-            ],
-            "regression_mse": 1.0,
-            "zero_baseline_mse": 1.0,
-            "brier_score": 0.25,
-            "log_loss": 0.6931,
-            "ece": 0.039
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
           },
           "trading": {
             "total_trades": 0,
@@ -449,12 +405,21 @@
             "average_trade_return_pct": 0.0,
             "median_trade_return_pct": 0.0,
             "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
             "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
             "average_holding_duration_hours": 0.0,
             "max_consecutive_losses": 0,
-            "time_in_market_pct": 0.0,
-            "turnover_usd": 0.0,
             "fee_costs_pct": 0.0,
             "slippage_costs_pct": 0.0,
             "funding_costs_pct": 0.0,
@@ -462,9 +427,8 @@
             "take_profit_exits": 0,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": 0.0,
-            "account_max_drawdown_pct": 0.0
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
           }
         }
       }
@@ -476,36 +440,32 @@
         "train_end": "2026-08-08 18:00:00+00:00",
         "test_start": "2026-08-09 07:00:00+00:00",
         "test_end": "2026-09-07 02:00:00+00:00",
-        "test_candles": 692
+        "test_candles": 692,
+        "eval_samples": 691
       },
       "models": {
         "HybridModel": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 61.42,
+            "n_samples": 691,
+            "directional_accuracy_pct": 61.94,
             "ci_95_directional_accuracy": [
-              52.96,
-              69.8
+              52.23,
+              70.54
             ],
-            "balanced_accuracy_pct": 51.17,
-            "precision_pct": 63.17,
-            "recall_pct": 91.92,
-            "f1_score": 0.7488,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                27,
-                232
-              ],
-              [
-                35,
-                398
-              ]
+            "balanced_accuracy_pct": 51.62,
+            "precision_pct": 63.49,
+            "recall_pct": 92.38,
+            "f1_score": 0.7526,
+            "regression_mse": 0.986577,
+            "ci_95_regression_mse": [
+              0.974,
+              1.0057
             ],
-            "regression_mse": 0.986867,
-            "zero_baseline_mse": 0.995665,
-            "brier_score": 0.3005,
-            "log_loss": 0.952,
-            "ece": 0.236
+            "regression_mae": 0.990466,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.2563,
+            "log_loss": 0.7162,
+            "ece": 0.1331
           },
           "trading": {
             "total_trades": 6,
@@ -513,219 +473,161 @@
             "short_trades": 0,
             "win_rate_pct": 33.33,
             "gross_profit_pct": 0.36,
-            "gross_loss_pct": 5.01,
+            "gross_loss_pct": 5.0,
             "profit_factor": 0.073,
-            "average_trade_return_pct": -0.7742,
+            "average_trade_return_pct": -0.7732,
             "median_trade_return_pct": -0.7884,
-            "expectancy_bps": -77.42,
+            "expectancy_bps": -77.32,
+            "ci_95_expectancy_bps": [
+              -93.61,
+              -71.45
+            ],
             "compounded_net_return_pct": -4.57,
-            "max_drawdown_pct": 6.11,
+            "annualized_return_pct": -37.35,
+            "account_equity_levered_return_pct": -7.54,
+            "max_drawdown_pct": 3.89,
+            "account_max_drawdown_pct": 7.6,
+            "sharpe_ratio": -7.539,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -11.909,
+            "calmar_ratio": -9.605,
             "average_holding_duration_hours": 8.5,
             "max_consecutive_losses": 3,
             "fee_costs_pct": 0.6,
             "slippage_costs_pct": 0.36,
-            "funding_costs_pct": 0.0158,
+            "funding_costs_pct": 0.0102,
             "stop_loss_exits": 3,
             "take_profit_exits": 0,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -7.55,
-            "account_max_drawdown_pct": 7.61
+            "horizon_exits": 3,
+            "unclosed_invalid_trades": 0
           }
         },
         "GradientBoosting": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 44.36,
+            "n_samples": 691,
+            "directional_accuracy_pct": 43.99,
             "ci_95_directional_accuracy": [
-              33.62,
-              53.27
+              34.08,
+              53.13
             ],
-            "balanced_accuracy_pct": 47.86,
-            "precision_pct": 59.76,
-            "recall_pct": 33.95,
-            "f1_score": 0.433,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                160,
-                99
-              ],
-              [
-                286,
-                147
-              ]
+            "balanced_accuracy_pct": 47.48,
+            "precision_pct": 59.35,
+            "recall_pct": 33.72,
+            "f1_score": 0.43,
+            "regression_mse": 1.786934,
+            "ci_95_regression_mse": [
+              1.4782,
+              2.1784
             ],
-            "regression_mse": 1.738475,
-            "zero_baseline_mse": 0.995665,
-            "brier_score": 0.4479,
-            "log_loss": 1.5864,
-            "ece": 0.4296
+            "regression_mae": 1.118562,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.5467,
+            "log_loss": 8.0214,
+            "ece": 0.5481
           },
           "trading": {
             "total_trades": 93,
             "long_trades": 36,
             "short_trades": 57,
             "win_rate_pct": 40.86,
-            "gross_profit_pct": 37.51,
-            "gross_loss_pct": 61.1,
-            "profit_factor": 0.614,
-            "average_trade_return_pct": -0.2536,
+            "gross_profit_pct": 37.49,
+            "gross_loss_pct": 61.18,
+            "profit_factor": 0.613,
+            "average_trade_return_pct": -0.2547,
             "median_trade_return_pct": -0.1741,
-            "expectancy_bps": -25.36,
-            "compounded_net_return_pct": -21.65,
-            "max_drawdown_pct": 22.36,
+            "expectancy_bps": -25.47,
+            "ci_95_expectancy_bps": [
+              -49.92,
+              -3.54
+            ],
+            "compounded_net_return_pct": -21.73,
+            "annualized_return_pct": -91.37,
+            "account_equity_levered_return_pct": -34.12,
+            "max_drawdown_pct": 22.34,
+            "account_max_drawdown_pct": 34.97,
+            "sharpe_ratio": -6.013,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -9.142,
+            "calmar_ratio": -4.09,
             "average_holding_duration_hours": 6.4,
             "max_consecutive_losses": 7,
             "fee_costs_pct": 9.3,
             "slippage_costs_pct": 5.58,
-            "funding_costs_pct": -0.2299,
+            "funding_costs_pct": -0.1319,
             "stop_loss_exits": 35,
             "take_profit_exits": 30,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -34.01,
-            "account_max_drawdown_pct": 34.85
-          }
-        },
-        "LogisticRegression": {
-          "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 37.86,
-            "ci_95_directional_accuracy": [
-              29.24,
-              46.9
-            ],
-            "balanced_accuracy_pct": 49.96,
-            "precision_pct": 61.54,
-            "recall_pct": 1.85,
-            "f1_score": 0.0359,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                254,
-                5
-              ],
-              [
-                425,
-                8
-              ]
-            ],
-            "regression_mse": 1.018387,
-            "zero_baseline_mse": 0.995665,
-            "brier_score": 0.5334,
-            "log_loss": 4.3836,
-            "ece": 0.5162
-          },
-          "trading": {
-            "total_trades": 84,
-            "long_trades": 0,
-            "short_trades": 84,
-            "win_rate_pct": 36.9,
-            "gross_profit_pct": 34.75,
-            "gross_loss_pct": 63.84,
-            "profit_factor": 0.544,
-            "average_trade_return_pct": -0.3463,
-            "median_trade_return_pct": -0.406,
-            "expectancy_bps": -34.63,
-            "compounded_net_return_pct": -25.85,
-            "max_drawdown_pct": 25.95,
-            "average_holding_duration_hours": 6.2,
-            "max_consecutive_losses": 12,
-            "fee_costs_pct": 8.4,
-            "slippage_costs_pct": 5.04,
-            "funding_costs_pct": -0.4431,
-            "stop_loss_exits": 36,
-            "take_profit_exits": 26,
-            "collision_exits": 0,
-            "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -39.81,
-            "account_max_drawdown_pct": 39.81
+            "horizon_exits": 28,
+            "unclosed_invalid_trades": 0
           }
         },
         "MajorityBaseline": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 62.57,
+            "n_samples": 691,
+            "directional_accuracy_pct": 62.66,
             "ci_95_directional_accuracy": [
-              53.71,
-              71.15
+              52.53,
+              71.43
             ],
             "balanced_accuracy_pct": 50.0,
-            "precision_pct": 62.57,
+            "precision_pct": 62.66,
             "recall_pct": 100.0,
-            "f1_score": 0.7698,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                0,
-                259
-              ],
-              [
-                0,
-                433
-              ]
+            "f1_score": 0.7705,
+            "regression_mse": 0.960843,
+            "ci_95_regression_mse": [
+              0.9364,
+              0.9954
             ],
-            "regression_mse": 0.96114,
-            "zero_baseline_mse": 0.995665,
-            "brier_score": 0.3743,
-            "log_loss": 5.1708,
-            "ece": 0.3743
+            "regression_mae": 0.975398,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.2762,
+            "log_loss": 0.7813,
+            "ece": 0.2054
           },
           "trading": {
             "total_trades": 95,
             "long_trades": 95,
             "short_trades": 0,
-            "win_rate_pct": 49.47,
-            "gross_profit_pct": 47.44,
-            "gross_loss_pct": 49.52,
-            "profit_factor": 0.958,
-            "average_trade_return_pct": -0.0219,
-            "median_trade_return_pct": -0.0007,
-            "expectancy_bps": -2.19,
-            "compounded_net_return_pct": -2.8,
-            "max_drawdown_pct": 15.35,
+            "win_rate_pct": 50.53,
+            "gross_profit_pct": 47.58,
+            "gross_loss_pct": 49.43,
+            "profit_factor": 0.963,
+            "average_trade_return_pct": -0.0194,
+            "median_trade_return_pct": 0.0067,
+            "expectancy_bps": -1.94,
+            "ci_95_expectancy_bps": [
+              -27.94,
+              24.92
+            ],
+            "compounded_net_return_pct": -2.58,
+            "annualized_return_pct": -22.99,
+            "account_equity_levered_return_pct": -5.08,
+            "max_drawdown_pct": 14.46,
+            "account_max_drawdown_pct": 23.34,
+            "sharpe_ratio": -0.471,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -0.759,
+            "calmar_ratio": -1.59,
             "average_holding_duration_hours": 6.3,
             "max_consecutive_losses": 5,
             "fee_costs_pct": 9.5,
             "slippage_costs_pct": 5.7,
-            "funding_costs_pct": 0.4973,
+            "funding_costs_pct": 0.2646,
             "stop_loss_exits": 30,
             "take_profit_exits": 36,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -5.44,
-            "account_max_drawdown_pct": 23.48
+            "horizon_exits": 29,
+            "unclosed_invalid_trades": 0
           }
         },
         "NoTrade": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 37.43,
-            "ci_95_directional_accuracy": [
-              28.87,
-              47.1
-            ],
-            "balanced_accuracy_pct": 50.0,
-            "precision_pct": 0.0,
-            "recall_pct": 0.0,
-            "f1_score": 0.0,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                259,
-                0
-              ],
-              [
-                433,
-                0
-              ]
-            ],
-            "regression_mse": 0.995665,
-            "zero_baseline_mse": 0.995665,
-            "brier_score": 0.25,
-            "log_loss": 0.6931,
-            "ece": 0.1257
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
           },
           "trading": {
             "total_trades": 0,
@@ -738,12 +640,21 @@
             "average_trade_return_pct": 0.0,
             "median_trade_return_pct": 0.0,
             "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
             "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
             "average_holding_duration_hours": 0.0,
             "max_consecutive_losses": 0,
-            "time_in_market_pct": 0.0,
-            "turnover_usd": 0.0,
             "fee_costs_pct": 0.0,
             "slippage_costs_pct": 0.0,
             "funding_costs_pct": 0.0,
@@ -751,9 +662,8 @@
             "take_profit_exits": 0,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": 0.0,
-            "account_max_drawdown_pct": 0.0
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
           }
         }
       }
@@ -765,256 +675,194 @@
         "train_end": "2026-09-06 14:00:00+00:00",
         "test_start": "2026-09-07 03:00:00+00:00",
         "test_end": "2026-10-05 22:00:00+00:00",
-        "test_candles": 692
+        "test_candles": 692,
+        "eval_samples": 691
       },
       "models": {
         "HybridModel": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 56.36,
+            "n_samples": 691,
+            "directional_accuracy_pct": 56.01,
             "ci_95_directional_accuracy": [
-              48.06,
+              47.92,
               66.07
             ],
-            "balanced_accuracy_pct": 51.41,
-            "precision_pct": 56.07,
-            "recall_pct": 97.65,
-            "f1_score": 0.7124,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                16,
-                293
-              ],
-              [
-                9,
-                374
-              ]
+            "balanced_accuracy_pct": 50.97,
+            "precision_pct": 55.92,
+            "recall_pct": 97.39,
+            "f1_score": 0.7105,
+            "regression_mse": 0.981681,
+            "ci_95_regression_mse": [
+              0.95,
+              1.0076
             ],
-            "regression_mse": 0.98176,
-            "zero_baseline_mse": 0.992775,
-            "brier_score": 0.376,
-            "log_loss": 1.3336,
-            "ece": 0.3509
+            "regression_mae": 0.985409,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.2883,
+            "log_loss": 0.7962,
+            "ece": 0.2072
           },
           "trading": {
             "total_trades": 26,
             "long_trades": 26,
             "short_trades": 0,
             "win_rate_pct": 50.0,
-            "gross_profit_pct": 12.54,
-            "gross_loss_pct": 17.55,
-            "profit_factor": 0.715,
-            "average_trade_return_pct": -0.1926,
-            "median_trade_return_pct": -0.183,
-            "expectancy_bps": -19.26,
-            "compounded_net_return_pct": -5.08,
-            "max_drawdown_pct": 8.96,
+            "gross_profit_pct": 12.58,
+            "gross_loss_pct": 17.54,
+            "profit_factor": 0.717,
+            "average_trade_return_pct": -0.1907,
+            "median_trade_return_pct": -0.1822,
+            "expectancy_bps": -19.07,
+            "ci_95_expectancy_bps": [
+              -73.72,
+              35.44
+            ],
+            "compounded_net_return_pct": -5.03,
+            "annualized_return_pct": -40.32,
+            "account_equity_levered_return_pct": -8.45,
+            "max_drawdown_pct": 7.2,
+            "account_max_drawdown_pct": 13.76,
+            "sharpe_ratio": -2.488,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -6.996,
+            "calmar_ratio": -5.603,
             "average_holding_duration_hours": 6.7,
             "max_consecutive_losses": 5,
             "fee_costs_pct": 2.6,
             "slippage_costs_pct": 1.56,
-            "funding_costs_pct": 0.0778,
+            "funding_costs_pct": 0.0276,
             "stop_loss_exits": 11,
             "take_profit_exits": 10,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -8.53,
-            "account_max_drawdown_pct": 13.76
+            "horizon_exits": 5,
+            "unclosed_invalid_trades": 0
           }
         },
         "GradientBoosting": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 54.91,
+            "n_samples": 691,
+            "directional_accuracy_pct": 56.3,
             "ci_95_directional_accuracy": [
-              48.14,
-              62.13
+              49.55,
+              62.65
             ],
-            "balanced_accuracy_pct": 54.8,
-            "precision_pct": 59.94,
-            "recall_pct": 55.87,
-            "f1_score": 0.5784,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                166,
-                143
-              ],
-              [
-                169,
-                214
-              ]
+            "balanced_accuracy_pct": 56.19,
+            "precision_pct": 61.34,
+            "recall_pct": 57.18,
+            "f1_score": 0.5919,
+            "regression_mse": 0.994943,
+            "ci_95_regression_mse": [
+              0.9245,
+              1.0691
             ],
-            "regression_mse": 0.994993,
-            "zero_baseline_mse": 0.992775,
-            "brier_score": 0.2796,
-            "log_loss": 0.8042,
-            "ece": 0.2194
+            "regression_mae": 0.957617,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.3792,
+            "log_loss": 1.9933,
+            "ece": 0.3631
           },
           "trading": {
             "total_trades": 95,
             "long_trades": 51,
             "short_trades": 44,
             "win_rate_pct": 40.0,
-            "gross_profit_pct": 40.41,
-            "gross_loss_pct": 66.79,
-            "profit_factor": 0.605,
-            "average_trade_return_pct": -0.2777,
+            "gross_profit_pct": 40.46,
+            "gross_loss_pct": 66.75,
+            "profit_factor": 0.606,
+            "average_trade_return_pct": -0.2768,
             "median_trade_return_pct": -0.5842,
-            "expectancy_bps": -27.77,
-            "compounded_net_return_pct": -23.76,
-            "max_drawdown_pct": 25.35,
+            "expectancy_bps": -27.68,
+            "ci_95_expectancy_bps": [
+              -49.9,
+              -7.63
+            ],
+            "compounded_net_return_pct": -23.69,
+            "annualized_return_pct": -93.31,
+            "account_equity_levered_return_pct": -36.81,
+            "max_drawdown_pct": 25.23,
+            "account_max_drawdown_pct": 38.88,
+            "sharpe_ratio": -6.995,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -15.023,
+            "calmar_ratio": -3.698,
             "average_holding_duration_hours": 6.2,
             "max_consecutive_losses": 6,
             "fee_costs_pct": 9.5,
             "slippage_costs_pct": 5.7,
-            "funding_costs_pct": 0.122,
+            "funding_costs_pct": 0.0373,
             "stop_loss_exits": 40,
             "take_profit_exits": 28,
             "collision_exits": 1,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -36.9,
-            "account_max_drawdown_pct": 39.0
-          }
-        },
-        "LogisticRegression": {
-          "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 45.23,
-            "ci_95_directional_accuracy": [
-              35.12,
-              53.88
-            ],
-            "balanced_accuracy_pct": 50.49,
-            "precision_pct": 83.33,
-            "recall_pct": 1.31,
-            "f1_score": 0.0257,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                308,
-                1
-              ],
-              [
-                378,
-                5
-              ]
-            ],
-            "regression_mse": 1.005582,
-            "zero_baseline_mse": 0.992775,
-            "brier_score": 0.5466,
-            "log_loss": 5.0927,
-            "ece": 0.5473
-          },
-          "trading": {
-            "total_trades": 97,
-            "long_trades": 0,
-            "short_trades": 97,
-            "win_rate_pct": 42.27,
-            "gross_profit_pct": 42.72,
-            "gross_loss_pct": 65.05,
-            "profit_factor": 0.657,
-            "average_trade_return_pct": -0.2303,
-            "median_trade_return_pct": -0.4035,
-            "expectancy_bps": -23.03,
-            "compounded_net_return_pct": -20.61,
-            "max_drawdown_pct": 24.92,
-            "average_holding_duration_hours": 6.1,
-            "max_consecutive_losses": 10,
-            "fee_costs_pct": 9.7,
-            "slippage_costs_pct": 5.82,
-            "funding_costs_pct": -0.3693,
-            "stop_loss_exits": 38,
-            "take_profit_exits": 32,
-            "collision_exits": 1,
-            "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -32.49,
-            "account_max_drawdown_pct": 37.88
+            "horizon_exits": 26,
+            "unclosed_invalid_trades": 0
           }
         },
         "MajorityBaseline": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 55.35,
+            "n_samples": 691,
+            "directional_accuracy_pct": 55.43,
             "ci_95_directional_accuracy": [
-              46.73,
-              65.18
+              47.32,
+              65.78
             ],
             "balanced_accuracy_pct": 50.0,
-            "precision_pct": 55.35,
+            "precision_pct": 55.43,
             "recall_pct": 100.0,
-            "f1_score": 0.7126,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                0,
-                309
-              ],
-              [
-                0,
-                383
-              ]
+            "f1_score": 0.7132,
+            "regression_mse": 0.98064,
+            "ci_95_regression_mse": [
+              0.9432,
+              1.0093
             ],
-            "regression_mse": 0.980909,
-            "zero_baseline_mse": 0.992775,
-            "brier_score": 0.4465,
-            "log_loss": 6.1691,
-            "ece": 0.4465
+            "regression_mae": 0.984081,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.3242,
+            "log_loss": 0.8971,
+            "ece": 0.2777
           },
           "trading": {
             "total_trades": 94,
             "long_trades": 94,
             "short_trades": 0,
             "win_rate_pct": 51.06,
-            "gross_profit_pct": 46.16,
-            "gross_loss_pct": 57.71,
-            "profit_factor": 0.8,
-            "average_trade_return_pct": -0.123,
-            "median_trade_return_pct": 0.05,
-            "expectancy_bps": -12.3,
-            "compounded_net_return_pct": -11.56,
-            "max_drawdown_pct": 16.95,
+            "gross_profit_pct": 46.25,
+            "gross_loss_pct": 57.63,
+            "profit_factor": 0.803,
+            "average_trade_return_pct": -0.121,
+            "median_trade_return_pct": 0.0555,
+            "expectancy_bps": -12.1,
+            "ci_95_expectancy_bps": [
+              -37.9,
+              16.95
+            ],
+            "compounded_net_return_pct": -11.4,
+            "annualized_return_pct": -70.2,
+            "account_equity_levered_return_pct": -18.93,
+            "max_drawdown_pct": 14.67,
+            "account_max_drawdown_pct": 25.15,
+            "sharpe_ratio": -3.004,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -6.352,
+            "calmar_ratio": -4.786,
             "average_holding_duration_hours": 6.4,
             "max_consecutive_losses": 6,
             "fee_costs_pct": 9.4,
             "slippage_costs_pct": 5.64,
-            "funding_costs_pct": 0.3693,
+            "funding_costs_pct": 0.189,
             "stop_loss_exits": 33,
             "take_profit_exits": 33,
             "collision_exits": 1,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -19.17,
-            "account_max_drawdown_pct": 25.17
+            "horizon_exits": 27,
+            "unclosed_invalid_trades": 0
           }
         },
         "NoTrade": {
           "predictive": {
-            "n_samples": 692,
-            "directional_accuracy_pct": 44.65,
-            "ci_95_directional_accuracy": [
-              34.15,
-              52.69
-            ],
-            "balanced_accuracy_pct": 50.0,
-            "precision_pct": 0.0,
-            "recall_pct": 0.0,
-            "f1_score": 0.0,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                309,
-                0
-              ],
-              [
-                383,
-                0
-              ]
-            ],
-            "regression_mse": 0.992775,
-            "zero_baseline_mse": 0.992775,
-            "brier_score": 0.25,
-            "log_loss": 0.6931,
-            "ece": 0.0535
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
           },
           "trading": {
             "total_trades": 0,
@@ -1027,12 +875,21 @@
             "average_trade_return_pct": 0.0,
             "median_trade_return_pct": 0.0,
             "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
             "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
             "average_holding_duration_hours": 0.0,
             "max_consecutive_losses": 0,
-            "time_in_market_pct": 0.0,
-            "turnover_usd": 0.0,
             "fee_costs_pct": 0.0,
             "slippage_costs_pct": 0.0,
             "funding_costs_pct": 0.0,
@@ -1040,9 +897,8 @@
             "take_profit_exits": 0,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": 0.0,
-            "account_max_drawdown_pct": 0.0
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
           }
         }
       }
@@ -1054,36 +910,32 @@
         "train_end": "2026-10-05 10:00:00+00:00",
         "test_start": "2026-10-05 23:00:00+00:00",
         "test_end": "2026-11-04 18:00:00+00:00",
-        "test_candles": 716
+        "test_candles": 716,
+        "eval_samples": 715
       },
       "models": {
         "HybridModel": {
           "predictive": {
-            "n_samples": 716,
-            "directional_accuracy_pct": 46.37,
+            "n_samples": 715,
+            "directional_accuracy_pct": 46.29,
             "ci_95_directional_accuracy": [
-              37.07,
-              54.31
+              37.35,
+              54.6
             ],
-            "balanced_accuracy_pct": 50.31,
+            "balanced_accuracy_pct": 50.2,
             "precision_pct": 44.73,
             "recall_pct": 86.52,
             "f1_score": 0.5897,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                56,
-                341
-              ],
-              [
-                43,
-                276
-              ]
+            "regression_mse": 0.994007,
+            "ci_95_regression_mse": [
+              0.9826,
+              1.0249
             ],
-            "regression_mse": 0.991751,
-            "zero_baseline_mse": 0.98324,
-            "brier_score": 0.3984,
-            "log_loss": 1.3288,
-            "ece": 0.3652
+            "regression_mae": 0.988962,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.3081,
+            "log_loss": 0.8368,
+            "ece": 0.2258
           },
           "trading": {
             "total_trades": 22,
@@ -1091,219 +943,161 @@
             "short_trades": 0,
             "win_rate_pct": 45.45,
             "gross_profit_pct": 9.06,
-            "gross_loss_pct": 16.1,
+            "gross_loss_pct": 16.09,
             "profit_factor": 0.563,
-            "average_trade_return_pct": -0.3201,
-            "median_trade_return_pct": -0.5368,
-            "expectancy_bps": -32.01,
-            "compounded_net_return_pct": -6.98,
-            "max_drawdown_pct": 10.75,
+            "average_trade_return_pct": -0.3197,
+            "median_trade_return_pct": -0.5376,
+            "expectancy_bps": -31.97,
+            "ci_95_expectancy_bps": [
+              -84.17,
+              3.23
+            ],
+            "compounded_net_return_pct": -6.97,
+            "annualized_return_pct": -51.42,
+            "account_equity_levered_return_pct": -11.52,
+            "max_drawdown_pct": 9.18,
+            "account_max_drawdown_pct": 15.43,
+            "sharpe_ratio": -3.762,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -7.616,
+            "calmar_ratio": -5.604,
             "average_holding_duration_hours": 6.4,
             "max_consecutive_losses": 5,
             "fee_costs_pct": 2.2,
             "slippage_costs_pct": 1.32,
-            "funding_costs_pct": 0.0158,
+            "funding_costs_pct": 0.0059,
             "stop_loss_exits": 11,
             "take_profit_exits": 6,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -11.54,
-            "account_max_drawdown_pct": 15.44
+            "horizon_exits": 5,
+            "unclosed_invalid_trades": 0
           }
         },
         "GradientBoosting": {
           "predictive": {
-            "n_samples": 716,
-            "directional_accuracy_pct": 53.77,
+            "n_samples": 715,
+            "directional_accuracy_pct": 51.61,
             "ci_95_directional_accuracy": [
-              46.18,
-              62.86
+              43.53,
+              60.34
             ],
-            "balanced_accuracy_pct": 55.97,
-            "precision_pct": 48.8,
-            "recall_pct": 76.18,
-            "f1_score": 0.5949,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                142,
-                255
-              ],
-              [
-                76,
-                243
-              ]
+            "balanced_accuracy_pct": 53.75,
+            "precision_pct": 47.28,
+            "recall_pct": 73.67,
+            "f1_score": 0.576,
+            "regression_mse": 1.243361,
+            "ci_95_regression_mse": [
+              1.0503,
+              1.4541
             ],
-            "regression_mse": 1.170187,
-            "zero_baseline_mse": 0.98324,
-            "brier_score": 0.3178,
-            "log_loss": 0.9216,
-            "ece": 0.2676
+            "regression_mae": 0.979818,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.4573,
+            "log_loss": 4.5499,
+            "ece": 0.4526
           },
           "trading": {
             "total_trades": 103,
             "long_trades": 74,
             "short_trades": 29,
             "win_rate_pct": 52.43,
-            "gross_profit_pct": 54.95,
-            "gross_loss_pct": 56.31,
-            "profit_factor": 0.976,
-            "average_trade_return_pct": -0.0133,
+            "gross_profit_pct": 54.98,
+            "gross_loss_pct": 56.25,
+            "profit_factor": 0.978,
+            "average_trade_return_pct": -0.0123,
             "median_trade_return_pct": 0.0715,
-            "expectancy_bps": -1.33,
-            "compounded_net_return_pct": -2.1,
-            "max_drawdown_pct": 13.29,
+            "expectancy_bps": -1.23,
+            "ci_95_expectancy_bps": [
+              -22.23,
+              16.9
+            ],
+            "compounded_net_return_pct": -1.99,
+            "annualized_return_pct": -18.25,
+            "account_equity_levered_return_pct": -4.11,
+            "max_drawdown_pct": 11.3,
+            "account_max_drawdown_pct": 18.58,
+            "sharpe_ratio": -0.327,
+            "deflated_sharpe_ratio": 0.0004,
+            "sortino_ratio": -0.669,
+            "calmar_ratio": -1.615,
             "average_holding_duration_hours": 5.9,
             "max_consecutive_losses": 5,
             "fee_costs_pct": 10.3,
             "slippage_costs_pct": 6.18,
-            "funding_costs_pct": 0.1948,
+            "funding_costs_pct": 0.0909,
             "stop_loss_exits": 37,
             "take_profit_exits": 42,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -4.27,
-            "account_max_drawdown_pct": 18.65
-          }
-        },
-        "LogisticRegression": {
-          "predictive": {
-            "n_samples": 716,
-            "directional_accuracy_pct": 47.77,
-            "ci_95_directional_accuracy": [
-              40.73,
-              56.83
-            ],
-            "balanced_accuracy_pct": 52.43,
-            "precision_pct": 45.85,
-            "recall_pct": 95.3,
-            "f1_score": 0.6191,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                38,
-                359
-              ],
-              [
-                15,
-                304
-              ]
-            ],
-            "regression_mse": 0.985655,
-            "zero_baseline_mse": 0.98324,
-            "brier_score": 0.326,
-            "log_loss": 0.937,
-            "ece": 0.2595
-          },
-          "trading": {
-            "total_trades": 72,
-            "long_trades": 71,
-            "short_trades": 1,
-            "win_rate_pct": 40.28,
-            "gross_profit_pct": 31.46,
-            "gross_loss_pct": 50.71,
-            "profit_factor": 0.621,
-            "average_trade_return_pct": -0.2673,
-            "median_trade_return_pct": -0.6674,
-            "expectancy_bps": -26.73,
-            "compounded_net_return_pct": -17.98,
-            "max_drawdown_pct": 21.6,
-            "average_holding_duration_hours": 5.8,
-            "max_consecutive_losses": 5,
-            "fee_costs_pct": 7.2,
-            "slippage_costs_pct": 4.32,
-            "funding_costs_pct": 0.1475,
-            "stop_loss_exits": 32,
-            "take_profit_exits": 19,
-            "collision_exits": 0,
-            "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -28.59,
-            "account_max_drawdown_pct": 32.74
+            "horizon_exits": 23,
+            "unclosed_invalid_trades": 0
           }
         },
         "MajorityBaseline": {
           "predictive": {
-            "n_samples": 716,
-            "directional_accuracy_pct": 44.55,
+            "n_samples": 715,
+            "directional_accuracy_pct": 44.62,
             "ci_95_directional_accuracy": [
-              35.7,
-              54.31
+              35.63,
+              54.45
             ],
             "balanced_accuracy_pct": 50.0,
-            "precision_pct": 44.55,
+            "precision_pct": 44.62,
             "recall_pct": 100.0,
-            "f1_score": 0.6164,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                0,
-                397
-              ],
-              [
-                0,
-                319
-              ]
+            "f1_score": 0.617,
+            "regression_mse": 1.007407,
+            "ci_95_regression_mse": [
+              0.9855,
+              1.05
             ],
-            "regression_mse": 1.004389,
-            "zero_baseline_mse": 0.98324,
-            "brier_score": 0.5545,
-            "log_loss": 7.6603,
-            "ece": 0.5545
+            "regression_mae": 0.994629,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.396,
+            "log_loss": 1.0701,
+            "ece": 0.3859
           },
           "trading": {
             "total_trades": 103,
             "long_trades": 103,
             "short_trades": 0,
             "win_rate_pct": 43.69,
-            "gross_profit_pct": 47.05,
-            "gross_loss_pct": 67.72,
-            "profit_factor": 0.695,
-            "average_trade_return_pct": -0.2006,
-            "median_trade_return_pct": -0.256,
-            "expectancy_bps": -20.06,
-            "compounded_net_return_pct": -19.32,
-            "max_drawdown_pct": 25.83,
+            "gross_profit_pct": 47.11,
+            "gross_loss_pct": 67.6,
+            "profit_factor": 0.697,
+            "average_trade_return_pct": -0.199,
+            "median_trade_return_pct": -0.2427,
+            "expectancy_bps": -19.9,
+            "ci_95_expectancy_bps": [
+              -43.32,
+              2.95
+            ],
+            "compounded_net_return_pct": -19.17,
+            "annualized_return_pct": -88.1,
+            "account_equity_levered_return_pct": -30.49,
+            "max_drawdown_pct": 24.05,
+            "account_max_drawdown_pct": 37.55,
+            "sharpe_ratio": -5.211,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -11.146,
+            "calmar_ratio": -3.663,
             "average_holding_duration_hours": 6.0,
             "max_consecutive_losses": 6,
             "fee_costs_pct": 10.3,
             "slippage_costs_pct": 6.18,
-            "funding_costs_pct": 0.2713,
+            "funding_costs_pct": 0.0969,
             "stop_loss_exits": 43,
             "take_profit_exits": 35,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": -30.69,
-            "account_max_drawdown_pct": 37.68
+            "horizon_exits": 24,
+            "unclosed_invalid_trades": 0
           }
         },
         "NoTrade": {
           "predictive": {
-            "n_samples": 716,
-            "directional_accuracy_pct": 55.45,
-            "ci_95_directional_accuracy": [
-              45.26,
-              64.66
-            ],
-            "balanced_accuracy_pct": 50.0,
-            "precision_pct": 0.0,
-            "recall_pct": 0.0,
-            "f1_score": 0.0,
-            "confusion_matrix_tn_fp_fn_tp": [
-              [
-                397,
-                0
-              ],
-              [
-                319,
-                0
-              ]
-            ],
-            "regression_mse": 0.98324,
-            "zero_baseline_mse": 0.98324,
-            "brier_score": 0.25,
-            "log_loss": 0.6931,
-            "ece": 0.0545
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
           },
           "trading": {
             "total_trades": 0,
@@ -1316,12 +1110,21 @@
             "average_trade_return_pct": 0.0,
             "median_trade_return_pct": 0.0,
             "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
             "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
             "average_holding_duration_hours": 0.0,
             "max_consecutive_losses": 0,
-            "time_in_market_pct": 0.0,
-            "turnover_usd": 0.0,
             "fee_costs_pct": 0.0,
             "slippage_costs_pct": 0.0,
             "funding_costs_pct": 0.0,
@@ -1329,49 +1132,11 @@
             "take_profit_exits": 0,
             "collision_exits": 0,
             "opening_gap_exits": 0,
-            "unclosed_invalid_trades": 0,
-            "account_equity_levered_return_pct": 0.0,
-            "account_max_drawdown_pct": 0.0
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
           }
         }
       }
     }
-  ],
-  "cost_sensitivity": {
-    "Base Case": {
-      "fee_rate": 0.0005,
-      "slippage_rate": 0.0003,
-      "funding_mode": "historical",
-      "total_trades": 59,
-      "compounded_net_return_pct": -14.28
-    },
-    "Low Cost (Maker/Zero Slip)": {
-      "fee_rate": 0.0003,
-      "slippage_rate": 0.0001,
-      "funding_mode": "historical",
-      "total_trades": 59,
-      "compounded_net_return_pct": -10.92
-    },
-    "High Cost (Adverse Slippage)": {
-      "fee_rate": 0.0007,
-      "slippage_rate": 0.0005,
-      "funding_mode": "historical",
-      "total_trades": 59,
-      "compounded_net_return_pct": -17.5
-    },
-    "Funding Stress (+10.95% APR)": {
-      "fee_rate": 0.0005,
-      "slippage_rate": 0.0003,
-      "funding_mode": "stress_10bps",
-      "total_trades": 59,
-      "compounded_net_return_pct": -14.66
-    },
-    "Funding Excluded": {
-      "fee_rate": 0.0005,
-      "slippage_rate": 0.0003,
-      "funding_mode": "none",
-      "total_trades": 59,
-      "compounded_net_return_pct": -14.17
-    }
-  }
+  ]
 }
