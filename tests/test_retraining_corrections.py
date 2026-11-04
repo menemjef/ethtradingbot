@@ -42,6 +42,7 @@ from data.preprocessor import (
     build_windows,
     transform,
 )
+from model.walk_forward import run_walk_forward_evaluation
 from model.trainer import (
     directional_accuracy,
     compute_comprehensive_metrics,
@@ -412,6 +413,92 @@ class TestTemporalLeakageAndPartitions(unittest.TestCase):
         self.assertAlmostEqual(scaler.mean_[1], df_train["open"].mean(), places=5)
         # Verify validation data did not influence scaler mean
         self.assertNotEqual(scaler.mean_[0], df_feat["close"].mean())
+
+
+
+    def test_multipage_traversal_across_intermediate_gap(self):
+        """Verify fetch_ohlcv detects gaps in assembled data and honours raise_on_gap."""
+        import data.fetcher as fetcher_mod
+        tf_ms = 3600 * 1000
+        now_dt = datetime.datetime(2026, 11, 4, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        now_ms = int(now_dt.timestamp() * 1000)
+
+        # Construct data that covers the most recent 1200 hours, with a 50-hour gap
+        # in the middle so the final DataFrame contains missing intervals.
+        current_candle_open = (now_ms // tf_ms) * tf_ms
+        latest_completed_open = current_candle_open - tf_ms
+
+        # Batch 1: 600 candles ending at T_gap_start
+        t_batch1_start = latest_completed_open - 1199 * tf_ms  # start of the full window
+        candles_batch1 = [[t_batch1_start + i * tf_ms, 2000.0, 2010.0, 1990.0, 2005.0, 100.0] for i in range(600)]
+
+        # Gap of 50 hours (missing 50 candles)
+        t_batch2_start = candles_batch1[-1][0] + 51 * tf_ms
+        # Batch 2: 600 candles ending past latest_completed_open
+        candles_batch2 = [[t_batch2_start + i * tf_ms, 2100.0, 2110.0, 2090.0, 2105.0, 100.0] for i in range(600)]
+
+        all_mock = candles_batch1 + candles_batch2
+
+        mock_exchange = MagicMock()
+        mock_exchange.milliseconds.return_value = now_ms
+        mock_exchange.parse_timeframe.return_value = 3600
+        mock_exchange.rateLimit = 5
+
+        def mock_fetch(symbol, timeframe, since, limit):
+            return [c for c in all_mock if c[0] >= since][:limit]
+
+        mock_exchange.fetch_ohlcv.side_effect = mock_fetch
+
+        saved_exchange = fetcher_mod._EXCHANGE
+        try:
+            # 1. With raise_on_gap=True, the assembled DataFrame has missing intervals -> ValueError
+            fetcher_mod._EXCHANGE = None
+            with patch("data.fetcher.get_exchange", return_value=mock_exchange):
+                with self.assertRaises(ValueError) as ctx:
+                    fetch_ohlcv("ETH/USDT:USDT", "1h", limit=800, warmup_bars=0, validate=False, raise_on_gap=True)
+                self.assertIn("missing intervals", str(ctx.exception))
+
+            # 2. With raise_on_gap=False, returns data (with gap warning, no exception)
+            fetcher_mod._EXCHANGE = None
+            with patch("data.fetcher.get_exchange", return_value=mock_exchange):
+                df = fetch_ohlcv("ETH/USDT:USDT", "1h", limit=800, warmup_bars=0, validate=False, raise_on_gap=False)
+                self.assertGreater(len(df), 0)
+                self.assertTrue(df.index.is_monotonic_increasing)
+        finally:
+            fetcher_mod._EXCHANGE = saved_exchange
+
+    def test_walk_forward_evaluation_execution(self):
+        """Verify full end-to-end walk forward execution on synthetic data."""
+        N = 350
+        dates = pd.date_range("2026-01-01", periods=N, freq="1h", tz="UTC")
+        price = 2000.0 + 100.0 * np.sin(np.linspace(0, 20, N))
+        df_raw = pd.DataFrame({
+            "open": price,
+            "high": price + 10.0,
+            "low": price - 10.0,
+            "close": price,
+            "volume": np.linspace(100, 1000, N),
+        }, index=dates)
+
+        wf_results = run_walk_forward_evaluation(
+            df_raw,
+            n_splits=2,
+            train_ratio=0.50,
+            test_ratio=0.20,
+            purge_horizon=5,
+            max_epochs=2,
+            batch_size=32,
+            device="cpu",
+        )
+
+        self.assertIn("fold_by_fold_results", wf_results)
+        self.assertIn("aggregate_summary", wf_results)
+        self.assertEqual(len(wf_results["fold_by_fold_results"]), 2)
+
+        agg = wf_results["aggregate_summary"]
+        self.assertIn("mean_directional_accuracy_pct", agg)
+        self.assertIn("mean_profit_factor", agg)
+        self.assertIn("total_net_pnl_sum_pct", agg)
 
 
 if __name__ == "__main__":

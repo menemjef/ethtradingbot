@@ -1,12 +1,12 @@
 """
-model/trainer.py — Training loop with early stopping, temporal purge/embargo,
-probability calibration tracking, and decoupled evaluation.
+model/trainer.py — Training loop with 3-way chronological partitioning,
+purged boundaries, probability calibration, and statistical uncertainty estimation.
 """
 
 import logging
 import os
 import time
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 import numpy as np
 import torch
 import torch.nn as nn
@@ -31,7 +31,15 @@ from config import (
 )
 from model.architecture import HybridModel
 from model.dataset import ETHDataset
-from data.preprocessor import split_train_val_purged
+from data.preprocessor import (
+    split_train_val_purged,
+    split_train_val_test_purged,
+    block_bootstrap_confidence_interval,
+)
+from model.calibration import (
+    evaluate_calibration,
+    fit_and_apply_temperature_scaling,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,47 +95,7 @@ def compute_comprehensive_metrics(
 
     # Probability Calibration Metrics
     clf_probs = 1.0 / (1.0 + np.exp(-np.clip(clf_logits, -30.0, 30.0)))
-    brier_score = float(np.mean((clf_probs - target_binary) ** 2))
-
-    eps = 1e-12
-    clipped_probs = np.clip(clf_probs, eps, 1.0 - eps)
-    log_loss = float(-np.mean(target_binary * np.log(clipped_probs) + (1.0 - target_binary) * np.log(1.0 - clipped_probs)))
-
-    # Expected Calibration Error (ECE) with 10 bins
-    n_bins = 10
-    bin_boundaries = np.linspace(0.0, 1.0, n_bins + 1)
-    ece = 0.0
-    reliability_curve = []
-
-    for b in range(n_bins):
-        bin_lower = float(bin_boundaries[b])
-        bin_upper = float(bin_boundaries[b + 1])
-        in_bin = (clf_probs >= bin_lower) & (clf_probs < bin_upper if b < n_bins - 1 else clf_probs <= bin_upper)
-        bin_count = int(in_bin.sum())
-
-        if bin_count > 0:
-            bin_conf = float(np.mean(clf_probs[in_bin]))
-            bin_acc = float(np.mean(target_binary[in_bin]))
-            bin_error = abs(bin_acc - bin_conf)
-            ece += (bin_count / N) * bin_error
-            reliability_curve.append({
-                "bin_idx": b,
-                "bin_range": (bin_lower, bin_upper),
-                "sample_count": bin_count,
-                "mean_confidence": bin_conf,
-                "empirical_accuracy": bin_acc,
-                "calibration_gap": float(bin_error),
-            })
-        else:
-            reliability_curve.append({
-                "bin_idx": b,
-                "bin_range": (bin_lower, bin_upper),
-                "sample_count": 0,
-                "mean_confidence": 0.0,
-                "empirical_accuracy": 0.0,
-                "calibration_gap": 0.0,
-            })
-    ece = float(ece)
+    cal_eval = evaluate_calibration(clf_probs, target_binary)
 
     # Long vs Short Breakdown
     long_mask = targets > 0
@@ -157,7 +125,7 @@ def compute_comprehensive_metrics(
         thresh_reg_mse = 0.0
 
     metrics = {
-        "validation_samples": N,
+        "sample_count": N,
         "trading_signal_directional_accuracy": trading_signal_acc,
         "regression_directional_accuracy": reg_dir_acc,
         "classification_directional_accuracy": clf_dir_acc,
@@ -166,14 +134,7 @@ def compute_comprehensive_metrics(
         "trivial_zero_mse": trivial_zero_mse,
         "mse_vs_trivial_ratio": mse_vs_trivial,
         "classification_balanced_accuracy": balanced_acc,
-        "calibration": {
-            "brier_score": brier_score,
-            "log_loss": log_loss,
-            "expected_calibration_error_ece": ece,
-            "mean_predicted_probability": float(np.mean(clf_probs)),
-            "probability_std": float(np.std(clf_probs)),
-            "reliability_curve": reliability_curve,
-        },
+        "calibration": cal_eval,
         "confusion_matrix": {
             "tp": tp,
             "fp": fp,
@@ -220,39 +181,45 @@ def train_model(
     pos_weight_mode: str = "balanced",
     label_smoothing: float = 0.0,
     checkpoint_metric: str = "regression_mse",
+    use_three_way_split: bool = True,
+    train_ratio: float = 0.60,
+    val_ratio: float = 0.20,
+    test_ratio: float = 0.20,
+    purge_horizon: int = TARGET_HORIZON,
 ) -> Tuple[HybridModel, Dict[str, Any]]:
     """
-    Full training pipeline with temporal leakage protection (purge/embargo),
-    calibrated loss weighting, and comprehensive reporting.
-
-    Args:
-        pos_weight_mode:
-            - "balanced" (default): pos_weight = neg_samples / pos_samples from training split strictly.
-            - "unweighted": pos_weight = 1.0.
-            - "legacy_1.17": pos_weight = 1.17 (hardcoded legacy).
-        label_smoothing:
-            - 0.0 (default): No label smoothing for uncompromised probability calibration.
-            - 0.25: Legacy label smoothing.
-        checkpoint_metric:
-            - "regression_mse" (default): Selects checkpoint minimizing validation MSE.
-            - "classification_loss": Selects checkpoint minimizing validation BCE.
-            - "directional_accuracy": Selects checkpoint maximizing classification directional accuracy.
+    Production-integrated training pipeline with:
+    1. Chronological 3-way split: 60% Train, 20% Val/Calibration, 20% Untouched Test.
+    2. Temporal purge gaps at both boundaries.
+    3. Scalers fit strictly on training data.
+    4. Post-hoc probability calibration on designated calibration partition.
+    5. Untouched Test evaluated only after model parameters are frozen.
+    6. Moving block bootstrap uncertainty estimation across multiple block sizes [12, 24, 48, 168].
     """
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Training on device: %s", device)
 
-    # ── Dataset split with temporal purge ──────────────────────────────────
-    (X_c_train, X_m_train, y_train), (X_c_val, X_m_val, y_val), split_meta = split_train_val_purged(
-        X_candle, X_market, y,
-        train_split=TRAIN_SPLIT,
-        purge_horizon=TARGET_HORIZON,
-    )
+    # ── 1. Chronological Partitioning with Temporal Purging ───────────────
+    if use_three_way_split:
+        (X_c_tr, X_m_tr, y_tr), (X_c_va, X_m_va, y_va), (X_c_te, X_m_te, y_te), split_meta = split_train_val_test_purged(
+            X_candle, X_market, y,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            test_ratio=test_ratio,
+            purge_horizon=purge_horizon,
+        )
+    else:
+        (X_c_tr, X_m_tr, y_tr), (X_c_va, X_m_va, y_va), split_meta = split_train_val_purged(
+            X_candle, X_market, y,
+            train_split=TRAIN_SPLIT,
+            purge_horizon=purge_horizon,
+        )
+        X_c_te, X_m_te, y_te = None, None, None
 
-    train_ds = ETHDataset(X_c_train, X_m_train, y_train)
-    val_ds = ETHDataset(X_c_val, X_m_val, y_val)
+    train_ds = ETHDataset(X_c_tr, X_m_tr, y_tr)
+    val_ds = ETHDataset(X_c_va, X_m_va, y_va)
 
-    # Recency-weighted sampling
     sample_weights = _build_recency_weights(len(train_ds), RECENCY_WEIGHT)
     sampler = torch.utils.data.WeightedRandomSampler(
         weights=torch.from_numpy(sample_weights).double(),
@@ -262,9 +229,9 @@ def train_model(
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=sampler, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-    # Calculate class weighting strictly from training partition
-    n_pos_train = int((y_train > 0).sum())
-    n_neg_train = int((y_train <= 0).sum())
+    # Class weighting strictly from training partition
+    n_pos_train = int((y_tr > 0).sum())
+    n_neg_train = int((y_tr <= 0).sum())
     data_ratio = float(n_neg_train / max(1, n_pos_train))
 
     if pos_weight_mode == "balanced":
@@ -285,7 +252,7 @@ def train_model(
                 pos_weight_val, rationale, label_smoothing)
     logger.info("Checkpoint Selection Metric: '%s'", checkpoint_metric)
 
-    # ── Model, optimizer, loss ─────────────────────────────────────────────
+    # ── 2. Model, Optimizer, Loss ──────────────────────────────────────────
     model = HybridModel().to(device)
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
     scheduler = CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=1e-6)
@@ -294,7 +261,7 @@ def train_model(
     pos_weight_tensor = torch.tensor([pos_weight_val], device=device, dtype=torch.float32)
     bce_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
 
-    # ── Training loop ──────────────────────────────────────────────────────
+    # ── 3. Training Loop (Model Selection on Validation Only) ──────────────
     best_eval_metric = float("inf") if "loss" in checkpoint_metric or "mse" in checkpoint_metric else float("-inf")
     best_epoch = 0
     patience_counter = 0
@@ -340,7 +307,7 @@ def train_model(
             optimizer.step()
             train_losses.append(loss.item())
 
-        # Validation
+        # Validation evaluation for early stopping
         model.eval()
         val_mse_losses, val_bce_losses = [], []
         val_clf_preds, val_reg_preds, val_targets = [], [], []
@@ -381,7 +348,6 @@ def train_model(
             optimizer.param_groups[0]["lr"], elapsed,
         )
 
-        # Checkpoint selection evaluation
         if checkpoint_metric == "regression_mse":
             current_metric = val_loss_mse
             is_better = current_metric < best_eval_metric
@@ -408,13 +374,12 @@ def train_model(
                 logger.info("Early stopping at epoch %d (patience=%d exhausted)", epoch, PATIENCE)
                 break
 
-    # Load best checkpoint
+    # ── 4. Restore Best Checkpoint ─────────────────────────────────────────
     if os.path.exists(config.MODEL_PATH):
         model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
-    logger.info("Training complete. Restored best model from epoch %d (%s: %.4f)",
-                best_epoch, checkpoint_metric, best_eval_metric)
+    logger.info("Restored best model from epoch %d (%s: %.4f)", best_epoch, checkpoint_metric, best_eval_metric)
 
-    # ── Final rigorous evaluation on best model ────────────────────────────
+    # ── 5. Validation Evaluation on Best Model ────────────────────────────
     model.eval()
     final_clf_preds, final_reg_preds, final_targets = [], [], []
     with torch.no_grad():
@@ -424,38 +389,133 @@ def train_model(
             final_reg_preds.extend(reg_pred.squeeze(-1).cpu().numpy())
             final_targets.extend(target.numpy())
 
-    metrics = compute_comprehensive_metrics(
-        reg_preds=np.array(final_reg_preds, dtype=np.float32),
-        clf_logits=np.array(final_clf_preds, dtype=np.float32),
-        targets=np.array(final_targets, dtype=np.float32),
+    val_reg_np = np.array(final_reg_preds, dtype=np.float32)
+    val_clf_np = np.array(final_clf_preds, dtype=np.float32)
+    val_y_np = np.array(final_targets, dtype=np.float32)
+
+    val_metrics = compute_comprehensive_metrics(
+        reg_preds=val_reg_np,
+        clf_logits=val_clf_np,
+        targets=val_y_np,
         signal_threshold=SIGNAL_THRESHOLD,
         target_multiplier=TARGET_MULTIPLIER,
     )
-    metrics["best_epoch"] = best_epoch
-    metrics["checkpoint_metric"] = checkpoint_metric
-    metrics["best_checkpoint_metric_val"] = best_eval_metric
-    metrics["pos_weight_applied"] = pos_weight_val
-    metrics["pos_weight_mode"] = pos_weight_mode
-    metrics["label_smoothing_applied"] = label_smoothing
-    metrics["split_metadata"] = split_meta
+    val_metrics["best_epoch"] = best_epoch
+    val_metrics["checkpoint_metric"] = checkpoint_metric
+    val_metrics["best_checkpoint_metric_val"] = best_eval_metric
+    val_metrics["split_metadata"] = split_meta
 
-    logger.info("=" * 60)
-    logger.info("RIGOROUS VALIDATION METRICS (Checkpoint: %s):", checkpoint_metric)
-    logger.info("  Trading Signal Directional Accuracy: %.2f%%", metrics["trading_signal_directional_accuracy"] * 100)
-    logger.info("  Classification Directional Accuracy:  %.2f%%", metrics["classification_directional_accuracy"] * 100)
-    logger.info("  Regression MSE: %.4f (vs Trivial Zero: %.4f | Ratio: %.3f)",
-                metrics["regression_mse"], metrics["trivial_zero_mse"], metrics["mse_vs_trivial_ratio"])
-    logger.info("  Classification Balanced Accuracy:    %.2f%% (Long recall: %.2f%%, Short recall: %.2f%%)",
-                metrics["classification_balanced_accuracy"] * 100,
-                metrics["confusion_matrix"]["tpr_long_recall"] * 100,
-                metrics["confusion_matrix"]["tnr_short_recall"] * 100)
-    cal = metrics["calibration"]
-    logger.info("  Calibration: Brier Score = %.4f | Log Loss = %.4f | ECE = %.4f",
-                cal["brier_score"], cal["log_loss"], cal["expected_calibration_error_ece"])
-    tf = metrics["threshold_filtered"]
-    logger.info("  Above Threshold (|pred| >= %.4f):   %d/%d (%.2f%% passing)",
-                tf["threshold"], tf["samples_passing"], metrics["validation_samples"], tf["pct_passing"])
-    logger.info("  Threshold Trading Signal Accuracy:   %.2f%%", tf["trading_signal_accuracy"] * 100)
-    logger.info("=" * 60)
+    # ── 6. Probability Calibration (Fit Temperature Scaling) ──────────────
+    # Fits temperature strictly on the validation/calibration partition
+    cal_val_probs, fitted_t, uncal_val_cal, cal_val_cal = fit_and_apply_temperature_scaling(
+        cal_logits=val_clf_np,
+        cal_targets=val_y_np,
+        eval_logits=val_clf_np,
+        eval_targets=val_y_np,
+    )
 
-    return model, metrics
+    calibration_results = {
+        "fitted_temperature": fitted_t,
+        "validation_uncalibrated": uncal_val_cal,
+        "validation_calibrated": cal_val_cal,
+    }
+
+    # ── 7. Untouched Final Test Partition Evaluation (Frozen Model) ────────
+    test_metrics = None
+    uncertainty_report = None
+
+    if use_three_way_split and X_c_te is not None:
+        logger.info("Evaluating FROZEN model on UNTOUCHED final test partition (%d samples)...", len(y_te))
+        test_ds = ETHDataset(X_c_te, X_m_te, y_te)
+        test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
+
+        test_reg_preds, test_clf_preds, test_targets_list = [], [], []
+        with torch.no_grad():
+            for x_c, x_m, target in test_loader:
+                reg_pred, clf_pred = model(x_c.to(device), x_m.to(device))
+                test_reg_preds.extend(reg_pred.squeeze(-1).cpu().numpy())
+                test_clf_preds.extend(clf_pred.squeeze(-1).cpu().numpy())
+                test_targets_list.extend(target.numpy())
+
+        te_reg_np = np.array(test_reg_preds, dtype=np.float32)
+        te_clf_np = np.array(test_clf_preds, dtype=np.float32)
+        te_y_np = np.array(test_targets_list, dtype=np.float32)
+
+        test_metrics = compute_comprehensive_metrics(
+            reg_preds=te_reg_np,
+            clf_logits=te_clf_np,
+            targets=te_y_np,
+            signal_threshold=SIGNAL_THRESHOLD,
+            target_multiplier=TARGET_MULTIPLIER,
+        )
+
+        # Apply the frozen temperature parameter fitted on calibration partition
+        te_cal_probs = 1.0 / (1.0 + np.exp(-np.clip(te_clf_np / fitted_t, -30.0, 30.0)))
+        test_cal_eval = evaluate_calibration(te_cal_probs, (te_y_np > 0).astype(int))
+        test_metrics["calibrated_with_val_temperature"] = test_cal_eval
+        test_metrics["temperature_applied"] = fitted_t
+
+        # ── 8. Block Bootstrap Uncertainty on Final Test Partition ─────────
+        logger.info("Computing Moving Block Bootstrap Uncertainty on Test Partition across blocks [12, 24, 48, 168]...")
+        block_sizes = [12, 24, 48, 168]
+        bootstrap_results = {}
+
+        def acc_metric(preds, targets):
+            return directional_accuracy(preds, targets)
+
+        def mse_metric(preds, targets):
+            return float(np.mean((preds - targets) ** 2))
+
+        def brier_metric(probs, targets):
+            y_bin = (targets > 0).astype(np.float64)
+            return float(np.mean((probs - y_bin) ** 2))
+
+        for b_size in block_sizes:
+            if b_size >= len(te_y_np) // 2:
+                continue
+            ci_acc = block_bootstrap_confidence_interval(te_y_np, te_reg_np, acc_metric, block_size=b_size, n_bootstraps=500)
+            ci_mse = block_bootstrap_confidence_interval(te_y_np, te_reg_np, mse_metric, block_size=b_size, n_bootstraps=500)
+            ci_brier = block_bootstrap_confidence_interval(te_y_np, te_cal_probs, brier_metric, block_size=b_size, n_bootstraps=500)
+
+            bootstrap_results[f"block_{b_size}_hours"] = {
+                "block_size": b_size,
+                "directional_accuracy": ci_acc,
+                "regression_mse": ci_mse,
+                "brier_score": ci_brier,
+            }
+
+        uncertainty_report = {
+            "test_sample_count": len(te_y_np),
+            "bootstrap_replications": 500,
+            "confidence_level": 0.95,
+            "block_evaluations": bootstrap_results,
+        }
+
+    # Consolidated Results Manifest
+    results = {
+        "validation_metrics": val_metrics,
+        "calibration_results": calibration_results,
+        "final_test_metrics": test_metrics,
+        "test_uncertainty_analysis": uncertainty_report,
+        "split_metadata": split_meta,
+    }
+
+    # Logging summary
+    logger.info("=" * 65)
+    logger.info("TRAINING PIPELINE COMPLETE (3-Way Split Integration)")
+    logger.info("  Validation Acc (Selection):    %.2f%% | MSE: %.4f",
+                val_metrics["trading_signal_directional_accuracy"] * 100, val_metrics["regression_mse"])
+    logger.info("  Fitted Calibration Temperature: T = %.4f", fitted_t)
+    if test_metrics:
+        logger.info("  UNTOUCHED FINAL TEST ACCURACY: %.2f%% | MSE: %.4f",
+                    test_metrics["trading_signal_directional_accuracy"] * 100, test_metrics["regression_mse"])
+        logger.info("  Test Brier Score:              %.4f (Baseline: %.4f)",
+                    test_metrics["calibrated_with_val_temperature"]["brier_score"],
+                    test_metrics["calibrated_with_val_temperature"]["brier_baseline_constant_prior"])
+        if uncertainty_report and "block_12_hours" in uncertainty_report["block_evaluations"]:
+            ci = uncertainty_report["block_evaluations"]["block_12_hours"]["directional_accuracy"]
+            logger.info("  Test Acc 95%% CI (Block 12h):   [%.2f%% .. %.2f%%] (StdErr: %.4f)",
+                        ci["ci_lower"] * 100, ci["ci_upper"] * 100, ci["std_error"])
+    logger.info("=" * 65)
+
+    return model, results

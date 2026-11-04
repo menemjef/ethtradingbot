@@ -209,3 +209,96 @@ Prior to initiating any full retraining run, the following architectural and exp
    - Thresholds must be calibrated on the Validation/Calibration partition only; the final Test partition must remain strictly out-of-sample and evaluated once.
 3. **Execution Routing Alignment:**
    - Currently, `live/signal_engine.py` routes to the regression head. If Option B is selected, signal engine routing must be aligned with calibrated probability thresholds prior to live trading.
+
+
+---
+
+## Pass 3: Training Pipeline Integration (2026-11-04)
+
+> **Commit:** `(pending — changes staged for export)`  
+> **Status:** All integrations complete, 25 unittest + 8 audit bridge tests passing. Awaiting retraining authorization.
+
+### 9. Three-Way Chronological Split Integration
+
+**Requirement:** The existing `split_train_val_test_purged()` helper in `data/preprocessor.py` was not connected to the actual training pipeline.
+
+**Changes Applied:**
+
+| Component | Before | After |
+|---|---|---|
+| `model/trainer.py` | 80/20 train/val via `split_train_val_purged()` | 60/20/20 train/val/test via `split_train_val_test_purged()` with `use_three_way_split=True` |
+| Purge gaps | Single H=12 gap at train-val boundary | Dual H=12 purge gaps at both train→val and val→test boundaries |
+| Scaler fitting | Fitted on purged training data | Unchanged — fitted on purged training data only |
+| Checkpoint selection | Validation partition | Validation partition only (test partition never seen during training) |
+| Final test evaluation | Not implemented | Frozen model evaluated on untouched test partition after all choices are finalized |
+
+**train.py Changes:**
+- Default `--warmup-bars` changed from 50 to **720** (30-day Fibonacci retracement lookback)
+- Added `--allow-gaps` flag (default: False, raises `ValueError` on detected gaps during training)
+- Added `--train-ratio` (default 0.60) and `--val-ratio` (default 0.20) arguments
+- Added `--walk-forward` flag and `--wf-folds` (default 4)
+- Explicit partition boundary logging with bar counts at each stage
+- Comprehensive results logging: validation metrics, calibration temperature, test partition accuracy, Brier score, and bootstrap CIs
+
+### 10. Temperature Scaling Calibration Integration
+
+**Pipeline Flow:**
+1. Train model, select best checkpoint via validation partition
+2. After training: fit temperature parameter $T > 0$ on validation/calibration partition logits via L-BFGS
+3. Apply frozen $T$ to test partition for calibrated probability evaluation
+4. Report Brier score, Log Loss, and ECE against constant-prior baselines on both partitions
+
+### 11. Block Bootstrap Uncertainty Estimation
+
+After evaluating the frozen model on the untouched test partition, block bootstrap confidence intervals are computed for:
+- Directional accuracy
+- Regression MSE
+- Calibrated Brier score
+
+Block sizes: [12, 24, 48, 168] hours. Each with 500 bootstrap replications and 95% percentile CIs.
+
+### 12. Walk-Forward Cross-Validation Pipeline
+
+`model/walk_forward.py` is now fully integrated and callable via `train.py --walk-forward`:
+- Independent training on each chronological fold
+- Scalers fitted only on each fold's training window
+- Purge gaps applied between each fold's training and test windows
+- Trade simulation with maker/taker fees and slippage
+- Fold-by-fold metrics: directional accuracy, regression MSE, Brier score, log loss, win rate, profit factor, net PnL, max drawdown
+- Aggregate summary across all folds
+
+### 13. Data Fetcher Gap Pagination Fix
+
+The fetcher's pagination no longer breaks prematurely on intermediate exchange outage gaps when `target_end_ms` is set. Instead:
+- Tracks consecutive empty pages (max 3 retries) with cursor forward-leap
+- Continues toward `target_end_ms` across gaps
+- Preserves cursor progression safety (`next_since <= since` break)
+- `raise_on_gap=True` enforces gap-free data for training
+
+### 14. Test Suite (25 Tests)
+
+| Suite | Count | Status |
+|---|---|---|
+| `TestDataFetcherCorrections` | 5 | ✅ All pass |
+| `TestTBMCorrections` | 2 | ✅ All pass |
+| `TestEvaluationAndCalibration` | 2 | ✅ All pass |
+| `TestTemporalLeakageAndPartitions` | 6 | ✅ All pass (including new gap traversal, walk-forward execution) |
+| `TestFullPipeline` | 6 | ✅ All pass |
+| `TestRiskManager` | 3 | ✅ All pass |
+| `TestSignalEngine` | 1 | ✅ All pass |
+| Audit Bridge | 8 | ✅ All pass |
+| **Total** | **33** | **✅ 100% pass rate** |
+
+### 15. Files Modified in Pass 3
+
+| File | Change Type |
+|---|---|
+| `train.py` | Modified — 3-way split wiring, warmup default, walk-forward, comprehensive logging |
+| `model/trainer.py` | Modified — 3-way split partitioning, temperature scaling, block bootstrap, results manifest |
+| `model/calibration.py` | New — Temperature scaling, Brier/LogLoss/ECE evaluation |
+| `model/walk_forward.py` | New — Full walk-forward engine with trade simulation |
+| `data/fetcher.py` | Modified — Gap pagination fix |
+| `data/preprocessor.py` | Modified — 3-way split, walk-forward splits, block bootstrap helpers |
+| `data/indicators.py` | Modified — Ambiguous resolution default, logger |
+| `tests/test_retraining_corrections.py` | Modified — 15 tests (added gap traversal, walk-forward execution) |
+| `training/forensic_report.md` | Updated — This section |

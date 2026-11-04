@@ -84,8 +84,36 @@ def main():
     parser.add_argument(
         "--warmup-bars",
         type=int,
-        default=50,
-        help="Extra pre-roll candles to fetch for indicator warm-up (default: 50)",
+        default=720,
+        help="Extra pre-roll candles to fetch for indicator warm-up (default: 720 for 30d Fibonacci)",
+    )
+    parser.add_argument(
+        "--allow-gaps",
+        action="store_true",
+        help="Allow historical data gaps without raising ValueError (default: False, gaps raise error)",
+    )
+    parser.add_argument(
+        "--train-ratio",
+        type=float,
+        default=0.60,
+        help="Fraction of data for training partition (default: 0.60)",
+    )
+    parser.add_argument(
+        "--val-ratio",
+        type=float,
+        default=0.20,
+        help="Fraction of data for validation/calibration partition (default: 0.20)",
+    )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help="Run full out-of-sample walk-forward cross-validation",
+    )
+    parser.add_argument(
+        "--wf-folds",
+        type=int,
+        default=4,
+        help="Number of folds for walk-forward evaluation (default: 4)",
     )
     parser.add_argument(
         "--pos-weight-mode",
@@ -147,9 +175,40 @@ def main():
             df_raw.index = df_raw.index.tz_localize('UTC')
     else:
         logger.info("Step 1/5 — Fetching %d x %s candles for %s (warmup_bars: %d)", limit, TIMEFRAME, SYMBOL, args.warmup_bars)
-        df_raw = fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit, warmup_bars=args.warmup_bars)
+        df_raw = fetch_ohlcv(
+            SYMBOL,
+            TIMEFRAME,
+            limit=limit,
+            warmup_bars=args.warmup_bars,
+            raise_on_gap=not args.allow_gaps,
+        )
     logger.info("Raw data shape: %s | Date range: %s -> %s",
                 df_raw.shape, df_raw.index[0], df_raw.index[-1])
+
+
+    # ── Walk-Forward Mode (if requested) ───────────────────────────────────
+    if args.walk_forward:
+        logger.info("=" * 60)
+        logger.info("Running Walk-Forward Cross-Validation (%d folds)...", args.wf_folds)
+        from model.walk_forward import run_walk_forward_evaluation
+        wf_results = run_walk_forward_evaluation(
+            df_raw,
+            n_splits=args.wf_folds,
+            train_ratio=0.50,
+            test_ratio=0.125,
+            purge_horizon=TARGET_HORIZON,
+            max_epochs=config.MAX_EPOCHS,
+        )
+        logger.info("=" * 60)
+        logger.info("WALK-FORWARD EVALUATION COMPLETE:")
+        agg = wf_results["aggregate_summary"]
+        logger.info("  Mean Directional Accuracy: %.2f%% (std: %.2f%%)", agg["mean_directional_accuracy_pct"], agg["std_directional_accuracy_pct"])
+        logger.info("  Mean Win Rate:            %.2f%%", agg.get("mean_win_rate_pct", 0.0))
+        logger.info("  Overall Profit Factor:    %.2f", agg["mean_profit_factor"])
+        logger.info("  Total Net Return:         %+.2f%%", agg["total_net_pnl_sum_pct"])
+        logger.info("  Worst Max Drawdown:       %.2f%%", agg.get("worst_max_drawdown_pct", 0.0))
+        logger.info("=" * 60)
+        return
 
     # ── 2. Compute indicators & target ───────────────────────────────────────
     # STEP 2: Turn raw candles into mathematical indicators (RSI, MACD, etc)
@@ -174,14 +233,24 @@ def main():
         sys.exit(1)
 
     # ── 3. Fit & save scalers ────────────────────────────────────────────────
-    # STEP 3: Fit scalers ONLY on training data to prevent lookahead bias (Data Leakage)
-    from config import TRAIN_SPLIT, TARGET_HORIZON
-    split_idx = int(len(df_feat) * TRAIN_SPLIT)
-    # Temporal leakage protection: fit scalers strictly on purged training samples
-    purged_train_end = max(0, split_idx - TARGET_HORIZON)
+    # STEP 3: Fit scalers ONLY on training partition to prevent lookahead leakage
+    from config import TARGET_HORIZON
+    train_end_idx = int(len(df_feat) * args.train_ratio)
+    purged_train_end = max(0, train_end_idx - TARGET_HORIZON)
     df_train = df_feat.iloc[:purged_train_end]
-    
-    logger.info("Step 3/5 — Fitting and saving StandardScalers (on purged train split: %d rows)", len(df_train))
+
+    val_end_idx = int(len(df_feat) * (args.train_ratio + args.val_ratio))
+    purged_val_end = max(train_end_idx, val_end_idx - TARGET_HORIZON)
+
+    logger.info("Step 3/5 — Partition Boundaries & Scaler Fitting:")
+    logger.info("  Candles Requested: %d | Pre-roll Warmup: %d | Total Fetched: %d", limit, args.warmup_bars, len(df_raw))
+    logger.info("  Usable Feature Rows (after indicator warmup & NaNs): %d", len(df_feat))
+    logger.info("  Training Partition (Fit Scalers Here): [0 : %d] (%d bars)", purged_train_end, len(df_train))
+    logger.info("  Purge Gap 1 (Train -> Val): [%d : %d] (%d bars)", purged_train_end, train_end_idx, train_end_idx - purged_train_end)
+    logger.info("  Validation Partition (Model Selection / Calibration): [%d : %d] (%d bars)", train_end_idx, purged_val_end, purged_val_end - train_end_idx)
+    logger.info("  Purge Gap 2 (Val -> Test):  [%d : %d] (%d bars)", purged_val_end, val_end_idx, val_end_idx - purged_val_end)
+    logger.info("  Final Test Partition (Frozen Evaluation): [%d : %d] (%d bars)", val_end_idx, len(df_feat), len(df_feat) - val_end_idx)
+
     scaler_candle, scaler_market = fit_and_save_scalers(df_train)
 
     # ── 4. Build sliding windows ─────────────────────────────────────────────
@@ -203,14 +272,21 @@ def main():
     # ── 5. Train model ───────────────────────────────────────────────────────
     # STEP 5: Feed the windows into the CNN + LSTM model and let it learn!
     # It will loop over the data (Epochs) trying to minimize its errors.
-    logger.info("Step 5/5 — Training HybridModel")
-    model, metrics = train_model(
+    logger.info("Step 5/5 — Training HybridModel with 3-Way Purged Partitioning")
+    model, results = train_model(
         X_candle, X_market, y,
         pos_weight_mode=args.pos_weight_mode,
         checkpoint_metric=args.checkpoint_metric,
+        use_three_way_split=True,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        purge_bars=TARGET_HORIZON,
     )
-    val_acc = metrics["trading_signal_directional_accuracy"]
-    val_acc_thresh = metrics["threshold_filtered"]["trading_signal_accuracy"]
+
+    val_metrics = results["validation_metrics"]
+    test_metrics = results.get("final_test_metrics")
+    cal_res = results.get("calibration_results", {})
+    unc_res = results.get("test_uncertainty_analysis")
 
     logger.info("=" * 60)
     logger.info("Training finished. Artifacts saved:")
@@ -220,13 +296,42 @@ def main():
     logger.info("  Scaler2 -> %s", SCALER_MARKET_PATH)
     logger.info("Run  python live.py  to start the live signal engine.")
     logger.info("=" * 60)
-    logger.info("RIGOROUS TEST RESULTS:")
-    logger.info("  Trading Signal Accuracy (Regression Head): %.2f%%", val_acc * 100)
-    logger.info("  Classification Head Directional Accuracy:  %.2f%%", metrics["classification_directional_accuracy"] * 100)
-    logger.info("  Regression MSE: %.4f (Trivial Zero Baseline: %.4f)", metrics["regression_mse"], metrics["trivial_zero_mse"])
-    tf = metrics["threshold_filtered"]
-    logger.info("  Threshold (|pred| >= %.4f) Passing: %d/%d (%.2f%%) | Winrate: %.2f%%",
-                tf["threshold"], tf["samples_passing"], metrics["validation_samples"], tf["pct_passing"], val_acc_thresh * 100)
+    logger.info("VALIDATION (MODEL SELECTION & CALIBRATION PARTITION):")
+    logger.info("  Best Epoch: %d (Criterion: %s = %.4f)", val_metrics.get("best_epoch", 0), args.checkpoint_metric, val_metrics.get("best_checkpoint_metric_val", 0.0))
+    logger.info("  Directional Accuracy: %.2f%%", val_metrics["trading_signal_directional_accuracy"] * 100)
+    logger.info("  Regression MSE:       %.4f (Trivial Zero Baseline: %.4f)", val_metrics["regression_mse"], val_metrics["trivial_zero_mse"])
+    logger.info("  Fitted Temperature:   T = %.4f", cal_res.get("fitted_temperature", 1.0))
+
+    if test_metrics:
+        logger.info("=" * 60)
+        logger.info("UNTOUCHED FINAL TEST PARTITION EVALUATION (FROZEN MODEL):")
+        test_acc = test_metrics["trading_signal_directional_accuracy"]
+        logger.info("  Directional Accuracy (Regression Head): %.2f%%", test_acc * 100)
+        logger.info("  Classification Head Directional Acc:   %.2f%%", test_metrics["classification_directional_accuracy"] * 100)
+        logger.info("  Regression MSE:                        %.4f (Trivial Zero: %.4f)", test_metrics["regression_mse"], test_metrics["trivial_zero_mse"])
+        
+        cal_test = test_metrics.get("calibrated_with_val_temperature", {})
+        if cal_test:
+            logger.info("  Calibrated Brier Score:                %.4f (Prior Baseline: %.4f, Diff: %+.4f)",
+                        cal_test.get("brier_score", 0.0), cal_test.get("brier_baseline_constant_prior", 0.0),
+                        cal_test.get("brier_improvement_over_baseline", 0.0))
+            logger.info("  Calibrated Log Loss:                   %.4f (Prior Baseline: %.4f)",
+                        cal_test.get("log_loss", 0.0), cal_test.get("log_loss_baseline_constant_prior", 0.0))
+
+        tf = test_metrics["threshold_filtered"]
+        logger.info("  Threshold (|pred| >= %.4f) Passing:    %d/%d (%.2f%%) | Winrate: %.2f%%",
+                    tf["threshold"], tf["samples_passing"], test_metrics["validation_samples"], tf["pct_passing"], tf["trading_signal_accuracy"] * 100)
+
+        if unc_res and "block_evaluations" in unc_res:
+            logger.info("-" * 60)
+            logger.info("BLOCK BOOTSTRAP UNCERTAINTY ESTIMATION (95%% CIs):")
+            for b_name, b_data in unc_res["block_evaluations"].items():
+                acc_ci = b_data["directional_accuracy"]
+                mse_ci = b_data["regression_mse"]
+                brier_ci = b_data["brier_score"]
+                logger.info("  %s: Acc [%.2f%% .. %.2f%%] (se: %.4f) | MSE [%.4f .. %.4f] | Brier [%.4f .. %.4f]",
+                            b_name, acc_ci["ci_lower"] * 100, acc_ci["ci_upper"] * 100, acc_ci["std_error"],
+                            mse_ci["ci_lower"], mse_ci["ci_upper"], brier_ci["ci_lower"], brier_ci["ci_upper"])
 
 
 if __name__ == "__main__":

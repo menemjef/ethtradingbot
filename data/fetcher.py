@@ -180,6 +180,9 @@ def fetch_ohlcv(
         )
 
     prev_since = None
+    consecutive_empty = 0
+    max_empty_retries = 3
+
     while True:
         fetch_n = per_page
         if target_end_ms is not None:
@@ -204,16 +207,25 @@ def fetch_ohlcv(
             raise
 
         if not raw:
-            break
+            consecutive_empty += 1
+            if target_end_ms is not None and since < target_end_ms and consecutive_empty <= max_empty_retries:
+                # Intermediate data gap suspected: advance cursor past empty window toward target_end
+                advance_jump = fetch_n * tf_ms
+                logger.warning(
+                    "Empty page received at since=%d. Intermediate data gap suspected. "
+                    "Advancing cursor by %d ms toward target_end=%d (attempt %d/%d).",
+                    since, advance_jump, target_end_ms, consecutive_empty, max_empty_retries,
+                )
+                since += advance_jump
+                continue
+            else:
+                break
 
+        consecutive_empty = 0
         all_candles.extend(raw)
 
         # If we reached or exceeded target end timestamp, stop pagination
         if target_end_ms is not None and raw[-1][0] >= target_end_ms:
-            break
-
-        # If exchange returns fewer candles than requested page, no more data exists
-        if len(raw) < fetch_n:
             break
 
         # Safety: Cursor progression validation to prevent infinite loops
@@ -228,6 +240,10 @@ def fetch_ohlcv(
             break
         prev_since = since
         since = next_since
+
+        # In explicit since_ms mode without target_end: break on short page
+        if target_end_ms is None and len(raw) < fetch_n:
+            break
 
         time.sleep(exchange.rateLimit / 1000)
 
