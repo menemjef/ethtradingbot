@@ -189,9 +189,18 @@ async def run_full_system():
     collector_task = asyncio.create_task(collector.run_async_collector())
 
     try:
+        # Immediate evaluation on startup
+        with collector._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT open, high, low, close, volume FROM completed_klines WHERE symbol = 'ETHUSDT' ORDER BY open_time DESC LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                bar = {"open": row[0], "high": row[1], "low": row[2], "close": row[3], "volume": row[4]}
+                runner.process_candle_close(bar)
+                logger.info(f"Initial candle processed. Latest ETH Close: ${bar['close']:.2f}")
+
         while True:
-            await asyncio.sleep(60.0)  # Periodic runner check
-            # Check latest completed 1m kline for ETHUSDT
+            await asyncio.sleep(10.0)  # Periodic runner check
             with collector._get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT open, high, low, close, volume FROM completed_klines WHERE symbol = 'ETHUSDT' ORDER BY open_time DESC LIMIT 1")
@@ -211,8 +220,12 @@ def main():
                         help="Action to perform")
     parser.add_argument("--mode", choices=["collector-only", "full"], default="full",
                         help="Start mode (collector-only or full paper trading)")
+    parser.add_argument("--full", action="store_true", help="Start in full paper trading mode")
+    parser.add_argument("--collector-only", action="store_true", help="Start in collector-only mode")
     parser.add_argument("--limit", type=int, default=20, help="Number of records to display")
     args = parser.parse_args()
+
+    mode = "collector-only" if args.collector_only else ("full" if args.full else args.mode)
 
     if args.command == "status":
         cmd_status()
@@ -221,7 +234,7 @@ def main():
     elif args.command == "inspect-positions":
         cmd_inspect_positions()
     elif args.command == "start":
-        if args.mode == "collector-only":
+        if mode == "collector-only":
             collector = MarketDataCollector()
             asyncio.run(collector.run_async_collector())
         else:

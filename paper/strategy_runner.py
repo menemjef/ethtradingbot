@@ -123,31 +123,47 @@ class CandidateAPaperRunner:
             conn.commit()
 
     def load_recent_klines_from_db(self, min_bars: int = 150) -> pd.DataFrame:
-        """Loads completed 1m klines from market_data.db and resamples to 4H candles."""
-        conn = sqlite3.connect(self.market_db_path)
-        try:
-            query = """
-            SELECT open_time, open, high, low, close, volume
-            FROM completed_klines
-            WHERE symbol = ? AND timeframe = '1m'
-            ORDER BY open_time ASC
-            """
-            df_1m = pd.read_sql_query(query, conn, params=(self.symbol,))
-        finally:
-            conn.close()
+        """Loads completed 1m klines from market_data.db and resamples to 4H candles, combining with historical cache if needed."""
+        df_1m = pd.DataFrame()
+        if os.path.exists(self.market_db_path):
+            conn = sqlite3.connect(self.market_db_path)
+            try:
+                query = """
+                SELECT open_time, open, high, low, close, volume
+                FROM completed_klines
+                WHERE symbol = ? AND timeframe = '1m'
+                ORDER BY open_time ASC
+                """
+                df_1m = pd.read_sql_query(query, conn, params=(self.symbol,))
+            finally:
+                conn.close()
 
-        if df_1m.empty:
-            return pd.DataFrame()
+        df_4h_live = pd.DataFrame()
+        if not df_1m.empty:
+            df_1m["timestamp"] = pd.to_datetime(df_1m["open_time"], unit="ms", utc=True)
+            df_1m.set_index("timestamp", inplace=True)
+            df_4h_live = df_1m.resample("4h", closed="left", label="left").agg({
+                "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
+            }).dropna()
 
-        df_1m["timestamp"] = pd.to_datetime(df_1m["open_time"], unit="ms", utc=True)
-        df_1m.set_index("timestamp", inplace=True)
+        # If live bars are insufficient for indicators (need at least 60 4H bars), supplement with historical cache
+        if len(df_4h_live) < 60:
+            hist_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "cache", "eth_usdt_1h_3yr.parquet")
+            if os.path.exists(hist_path):
+                df_hist_1h = pd.read_parquet(hist_path)
+                if not isinstance(df_hist_1h.index, pd.DatetimeIndex):
+                    df_hist_1h.index = pd.to_datetime(df_hist_1h.index, utc=True)
+                df_hist_4h = df_hist_1h.resample("4h", closed="left", label="left").agg({
+                    "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
+                }).dropna().tail(200)
 
-        # Resample to 4H candles
-        df_4h = df_1m.resample("4h", closed="left", label="left").agg({
-            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
-        }).dropna()
+                if not df_4h_live.empty:
+                    combined = pd.concat([df_hist_4h[df_hist_4h.index < df_4h_live.index[0]], df_4h_live])
+                    return combined
+                else:
+                    return df_hist_4h
 
-        return df_4h
+        return df_4h_live
 
     def evaluate_candidate_a(self, df_4h: pd.DataFrame) -> Dict[str, Any]:
         """
