@@ -455,6 +455,12 @@ class CandidateAPaperRunner:
 
         # Check stops and gaps against current 1m bar
         if current_bar:
+            # Enforce strict symbol isolation: never process a bar belonging to another symbol
+            bar_sym = current_bar.get("symbol")
+            if bar_sym and bar_sym != self.symbol:
+                logger.debug(f"Ignoring bar for {bar_sym}: runner is configured for {self.symbol}.")
+                return
+
             b_open = float(current_bar.get("open", 0.0))
             b_high = float(current_bar.get("high", 0.0))
             b_low = float(current_bar.get("low", 0.0))
@@ -515,10 +521,8 @@ class CandidateAPaperRunner:
         evaluations_made = 0
         key = (self.strategy_id, self.symbol)
 
-        # Inspect the last 10 completed candles for un-evaluated candles
-        recent_candidates = df_4h.tail(10)
-
-        for ts, candle in recent_candidates.iterrows():
+        # Inspect all completed candles chronologically (do not truncate to tail(10))
+        for ts, candle in df_4h.iterrows():
             c_val = candle.get("close_time")
             if pd.isna(c_val) or c_val is None or float(c_val) <= 0:
                 # Estimate close time from timestamp: ts + 4h - 1ms
@@ -546,8 +550,12 @@ class CandidateAPaperRunner:
             )
             evaluations_made += 1
 
-            # If signal is actionable and no position is open for this strategy
-            if sig in ["LONG", "SHORT"] and key not in self.exec_engine.active_positions:
+            # Only a genuinely current, eligible signal may open a new position!
+            # Historical missed candles must be recorded for continuity but must NOT trigger retroactive entries at current prices.
+            is_current_candle = (ts == df_4h.index[-1])
+
+            # If signal is actionable, genuinely current, and no position is open for this strategy
+            if is_current_candle and sig in ["LONG", "SHORT"] and key not in self.exec_engine.active_positions:
                 quote = quotes.get(self.symbol)
                 if not quote:
                     logger.warning(f"Valid signal {sig} on {self.symbol} but no fresh quote available. Entry deferred.")

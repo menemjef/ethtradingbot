@@ -440,8 +440,9 @@ async def run_full_system():
                     cur.execute("SELECT open, high, low, close FROM completed_klines WHERE symbol = ? AND timeframe = '1m' ORDER BY open_time DESC LIMIT 1", (sym,))
                     b_row = cur.fetchone()
                     if b_row:
-                        bar = {"open": b_row[0], "high": b_row[1], "low": b_row[2], "close": b_row[3]}
-                        runner.process_incoming_market_tick(quotes, current_bar=bar)
+                        bar = {"symbol": sym, "open": b_row[0], "high": b_row[1], "low": b_row[2], "close": b_row[3]}
+                        if runner.symbol == sym:
+                            runner.process_incoming_market_tick(quotes, current_bar=bar)
 
             # 2. Evaluate strategy on completed, 240-bar-verified 4H candles
             try:

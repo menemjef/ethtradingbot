@@ -208,22 +208,85 @@ class PaperExecutionEngine:
             );
             """)
 
-            # 6. Apply schema migrations if pre-existing tables lack Phase 2.2B columns
-            migration_statements = [
-                "ALTER TABLE paper_portfolio ADD COLUMN gross_leverage REAL NOT NULL DEFAULT 0.0;",
-                "ALTER TABLE paper_portfolio ADD COLUMN net_leverage REAL NOT NULL DEFAULT 0.0;",
-                "ALTER TABLE paper_positions ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';",
-                "ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';",
-                "ALTER TABLE paper_trades ADD COLUMN directional_pnl REAL DEFAULT 0.0;",
-                "ALTER TABLE paper_trades ADD COLUMN funding_pnl REAL DEFAULT 0.0;",
-                "ALTER TABLE paper_trades ADD COLUMN entry_fee_usd REAL DEFAULT 0.0;",
-                "ALTER TABLE paper_trades ADD COLUMN exit_fee_usd REAL DEFAULT 0.0;"
-            ]
-            for stmt in migration_statements:
-                try:
-                    conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
+            # 6. Apply backward-compatible schema migrations for pre-existing legacy databases
+            cur = conn.cursor()
+
+            # A. Migrate paper_portfolio columns
+            cur.execute("PRAGMA table_info(paper_portfolio);")
+            port_cols = {row[1] for row in cur.fetchall()}
+            if "gross_leverage" not in port_cols:
+                conn.execute("ALTER TABLE paper_portfolio ADD COLUMN gross_leverage REAL NOT NULL DEFAULT 0.0;")
+            if "net_leverage" not in port_cols:
+                conn.execute("ALTER TABLE paper_portfolio ADD COLUMN net_leverage REAL NOT NULL DEFAULT 0.0;")
+
+            # B. Migrate paper_positions columns
+            cur.execute("PRAGMA table_info(paper_positions);")
+            pos_cols = {row[1] for row in cur.fetchall()}
+            if "strategy_id" not in pos_cols:
+                conn.execute("ALTER TABLE paper_positions ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
+
+            # C. Migrate paper_orders columns
+            cur.execute("PRAGMA table_info(paper_orders);")
+            order_cols = {row[1] for row in cur.fetchall()}
+            if "strategy_id" not in order_cols:
+                conn.execute("ALTER TABLE paper_orders ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
+
+            # D. Migrate paper_trades table (handling legacy NOT NULL columns)
+            cur.execute("PRAGMA table_info(paper_trades);")
+            trade_cols = {row[1] for row in cur.fetchall()}
+            if "gross_pnl" in trade_cols:
+                # Legacy schema detected with incompatible NOT NULL columns
+                conn.execute("ALTER TABLE paper_trades RENAME TO _legacy_paper_trades;")
+                conn.execute("""
+                CREATE TABLE paper_trades (
+                    trade_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation',
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_time TEXT NOT NULL,
+                    exit_time TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    quantity REAL NOT NULL,
+                    holding_hours REAL NOT NULL,
+                    directional_pnl REAL NOT NULL,
+                    funding_pnl REAL NOT NULL,
+                    entry_fee_usd REAL NOT NULL,
+                    exit_fee_usd REAL NOT NULL,
+                    slippage_cost_usd REAL NOT NULL,
+                    net_pnl REAL NOT NULL,
+                    exit_reason TEXT NOT NULL
+                );
+                """)
+                conn.execute("""
+                INSERT INTO paper_trades (
+                    trade_id, strategy_id, symbol, side, entry_time, exit_time, entry_price, exit_price,
+                    quantity, holding_hours, directional_pnl, funding_pnl, entry_fee_usd, exit_fee_usd,
+                    slippage_cost_usd, net_pnl, exit_reason
+                )
+                SELECT
+                    trade_id,
+                    'CandidateA_Momentum_Continuation',
+                    symbol,
+                    side,
+                    entry_time,
+                    exit_time,
+                    entry_price,
+                    exit_price,
+                    quantity,
+                    holding_hours,
+                    gross_pnl,
+                    funding_cost_usd,
+                    fee_cost_usd,
+                    0.0,
+                    slippage_cost_usd,
+                    net_pnl,
+                    exit_reason
+                FROM _legacy_paper_trades;
+                """)
+                conn.execute("DROP TABLE _legacy_paper_trades;")
+            elif "strategy_id" not in trade_cols:
+                conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
 
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")
@@ -295,6 +358,14 @@ class PaperExecutionEngine:
                     "accumulated_funding": float(p_row[12]),
                     "status": "OPEN"
                 }
+
+            # Reconcile legacy cash balance if loaded from database where margin was not deducted
+            actual_margin = sum(p["margin"] for p in self.active_positions.values())
+            if actual_margin > 0 and abs(self.portfolio["cash_balance"] + actual_margin - self.portfolio["equity"]) > 1e-4:
+                if abs(self.portfolio["cash_balance"] - self.portfolio["equity"]) < 1e-4:
+                    self.portfolio["cash_balance"] -= actual_margin
+            self.portfolio["margin_used"] = actual_margin
+            self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"] + self.portfolio["unrealized_pnl"]
 
         logger.info(f"Loaded Paper State | Cash: ${self.portfolio['cash_balance']:.2f} | Equity: ${self.portfolio['equity']:.2f} | Active Positions: {list(self.active_positions.keys())}")
 
@@ -430,10 +501,10 @@ class PaperExecutionEngine:
             logger.warning(f"Insufficient cash balance (${self.portfolio['cash_balance']:.2f}) for margin ${margin_req:.2f} + fee ${fee_usd:.2f}.")
             return None
 
-        # Deduct entry fee and allocate margin
-        self.portfolio["cash_balance"] -= fee_usd
+        # Deduct entry fee and reserve entry margin from available cash
+        self.portfolio["cash_balance"] -= (margin_req + fee_usd)
         self.portfolio["margin_used"] += margin_req
-        self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"]
+        self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"] + self.portfolio["unrealized_pnl"]
 
         now_str = entry_time_str or datetime.now(timezone.utc).isoformat()
         pos_id = f"{strategy_id}_{symbol}_{uuid.uuid4().hex[:8]}"
@@ -539,12 +610,16 @@ class PaperExecutionEngine:
         slippage_cost = abs(fill_price - quote_used) * qty
         funding_pnl = pos.get("accumulated_funding", 0.0)
 
-        # Net PnL = Directional PnL + Funding PnL - Entry Fee - Exit Fee
-        net_pnl = directional_pnl + funding_pnl - exit_fee_usd
+        # Full Trade Net PnL = Directional PnL + Funding PnL - Entry Fee - Exit Fee
+        net_pnl = directional_pnl + funding_pnl - entry_fee_usd - exit_fee_usd
 
-        # Release Margin & Update Cash Balance
+        # Release Reserved Margin & Settle Directional PnL and Exit Fee to Available Cash
+        # NOTE:
+        # 1. Entry fee was already deducted from available cash at open_position.
+        # 2. Funding was already applied to available cash during settlement in apply_settled_funding_rates.
+        # 3. Therefore, cash balance update at close is ONLY: + margin_req + directional_pnl - exit_fee_usd.
         margin_req = pos["margin"]
-        self.portfolio["cash_balance"] += margin_req + net_pnl
+        self.portfolio["cash_balance"] += (margin_req + directional_pnl - exit_fee_usd)
         self.portfolio["margin_used"] = max(0.0, self.portfolio["margin_used"] - margin_req)
         self.portfolio["realized_pnl"] += net_pnl
         self.portfolio["unrealized_pnl"] = 0.0
