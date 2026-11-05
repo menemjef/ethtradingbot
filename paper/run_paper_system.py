@@ -185,7 +185,8 @@ def cmd_status():
             for sym, oi_cnt, oi_ts, oi_val, oi_usd in oi_rows:
                 oi_dt = datetime.fromtimestamp(oi_ts / 1000, tz=timezone.utc)
                 oi_age = (now_ms - oi_ts) / 1000.0 if oi_ts else 999.0
-                print(f"  {sym} Open Interest: {oi_val:,.2f} {sym[:3]} (${oi_usd:,.2f}) | Last: {oi_dt.strftime('%H:%M:%S UTC')} ({oi_age/60:.1f}m ago)")
+                oi_usd_str = f"${oi_usd:,.2f}" if (oi_usd is not None and oi_usd > 0) else "N/A"
+                print(f"  {sym} Open Interest: {oi_val:,.2f} {sym[:3]} ({oi_usd_str}) | Last: {oi_dt.strftime('%H:%M:%S UTC')} ({oi_age/60:.1f}m ago)")
 
             # Realized Funding Health
             cur.execute("""
@@ -437,10 +438,23 @@ async def run_full_system():
             for sym in DEFAULT_SYMBOLS:
                 with collector._get_connection() as conn:
                     cur = conn.cursor()
-                    cur.execute("SELECT open, high, low, close FROM completed_klines WHERE symbol = ? AND timeframe = '1m' ORDER BY open_time DESC LIMIT 1", (sym,))
+                    cur.execute("""
+                    SELECT open_time, close_time, open, high, low, close
+                    FROM completed_klines
+                    WHERE symbol = ? AND timeframe = '1m'
+                    ORDER BY open_time DESC LIMIT 1
+                    """, (sym,))
                     b_row = cur.fetchone()
                     if b_row:
-                        bar = {"symbol": sym, "open": b_row[0], "high": b_row[1], "low": b_row[2], "close": b_row[3]}
+                        bar = {
+                            "symbol": sym,
+                            "open_time": b_row[0],
+                            "close_time": b_row[1],
+                            "open": b_row[2],
+                            "high": b_row[3],
+                            "low": b_row[4],
+                            "close": b_row[5]
+                        }
                         if runner.symbol == sym:
                             runner.process_incoming_market_tick(quotes, current_bar=bar)
 

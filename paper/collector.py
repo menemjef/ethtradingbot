@@ -191,12 +191,44 @@ class MarketDataCollector:
                 symbol TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 open_interest REAL NOT NULL,
-                open_interest_usd REAL NOT NULL,
+                open_interest_usd REAL,
                 exchange_ts INTEGER NOT NULL,
                 receipt_ts INTEGER NOT NULL,
                 PRIMARY KEY (symbol, timestamp)
             );
             """)
+
+            # Migrate open_interest table if legacy schema has NOT NULL constraint on open_interest_usd
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(open_interest);")
+            oi_info = {row[1]: row for row in cur.fetchall()}
+            if "open_interest_usd" in oi_info and oi_info["open_interest_usd"][3] == 1:  # notnull == 1
+                conn.execute("ALTER TABLE open_interest RENAME TO _legacy_open_interest;")
+                conn.execute("""
+                CREATE TABLE open_interest (
+                    symbol TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    open_interest REAL NOT NULL,
+                    open_interest_usd REAL,
+                    exchange_ts INTEGER NOT NULL,
+                    receipt_ts INTEGER NOT NULL,
+                    PRIMARY KEY (symbol, timestamp)
+                );
+                """)
+                conn.execute("""
+                INSERT INTO open_interest (
+                    symbol, timestamp, open_interest, open_interest_usd, exchange_ts, receipt_ts
+                )
+                SELECT
+                    symbol,
+                    timestamp,
+                    open_interest,
+                    CASE WHEN open_interest_usd <= 0.0 THEN NULL ELSE open_interest_usd END,
+                    exchange_ts,
+                    receipt_ts
+                FROM _legacy_open_interest;
+                """)
+                conn.execute("DROP TABLE _legacy_open_interest;")
 
             # 5. Realized Funding Settlements table
             conn.execute("""
@@ -350,18 +382,47 @@ class MarketDataCollector:
             return None
 
         receipt_ts = int(time.time() * 1000)
+        oi_val = float(data.get("openInterest", 0.0))
         oi_record = {
             "symbol": symbol,
             "timestamp": int(data.get("time", receipt_ts)),
-            "open_interest": float(data.get("openInterest", 0.0)),
-            "open_interest_usd": 0.0,  # Will be populated with mark price if available
+            "open_interest": oi_val,
+            "open_interest_usd": None,  # Populated only with fresh valid mark price
             "exchange_ts": int(data.get("time", receipt_ts)),
             "receipt_ts": receipt_ts
         }
 
-        # Estimate notional USD from latest mark price if available
-        mp = self.latest_mark_prices.get(symbol, {}).get("mark_price", 0.0)
-        oi_record["open_interest_usd"] = oi_record["open_interest"] * mp
+        # Resolve fresh, valid mark price for USD conversion
+        mp = None
+        # 1. Check in-memory cached mark price
+        cached_mp = self.latest_mark_prices.get(symbol, {})
+        cached_px = float(cached_mp.get("mark_price", 0.0))
+        cached_ts = int(cached_mp.get("receipt_ts", 0))
+        if cached_px > 0 and (receipt_ts - cached_ts) <= (MAX_EVENT_STALE_SECONDS * 1000):
+            mp = cached_px
+        else:
+            # 2. Check mark_prices table in SQLite for recent fresh mark price
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT mark_price, receipt_ts FROM mark_prices WHERE symbol = ? ORDER BY receipt_ts DESC LIMIT 1",
+                        (symbol,)
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] and float(row[0]) > 0:
+                        db_px, db_ts = float(row[0]), int(row[1])
+                        if (receipt_ts - db_ts) <= (MAX_EVENT_STALE_SECONDS * 1000):
+                            mp = db_px
+            except Exception as e:
+                logger.debug(f"Could not read mark price from DB for {symbol}: {e}")
+
+        # Preserve base open interest; calculate USD only if fresh mark price is valid
+        if mp is not None and mp > 0:
+            oi_record["open_interest_usd"] = oi_val * mp
+        else:
+            # Never persist 0.0 notional when mark price is unavailable; persist None (NULL in DB)
+            oi_record["open_interest_usd"] = None
 
         with self._get_connection() as conn:
             conn.execute("""
@@ -390,11 +451,12 @@ class MarketDataCollector:
         receipt_ts = int(time.time() * 1000)
         records = []
         for row in data:
+            usd_val = float(row.get("sumOpenInterestValue", 0.0))
             records.append({
                 "symbol": symbol,
                 "timestamp": int(row.get("timestamp", 0)),
                 "open_interest": float(row.get("sumOpenInterest", 0.0)),
-                "open_interest_usd": float(row.get("sumOpenInterestValue", 0.0)),
+                "open_interest_usd": usd_val if usd_val > 0.0 else None,
                 "exchange_ts": int(row.get("timestamp", 0)),
                 "receipt_ts": receipt_ts
             })

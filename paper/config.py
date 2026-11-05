@@ -50,6 +50,7 @@ MAX_RECONNECT_DELAY_SEC = 60.0
 MAX_QUOTE_AGE_SECONDS = 5.0        # Quotes older than 5.0s are rejected as stale
 MAX_EVENT_STALE_SECONDS = 15.0     # Feed flagged degraded if no event within 15s
 MAX_KLINE_STALE_SECONDS = 120.0    # 1m kline feed flagged degraded if no bar within 120s
+MAX_SIGNAL_AGE_SECONDS = 900.0     # Signals older than 15 minutes (900s) rejected as stale
 
 # Polling Intervals for Public REST Metadata & Aggregates
 OPEN_INTEREST_POLL_INTERVAL_SEC = 300    # 5 minutes

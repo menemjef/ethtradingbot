@@ -288,6 +288,33 @@ class PaperExecutionEngine:
             elif "strategy_id" not in trade_cols:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
 
+            # 7. Versioned one-time migration: Phase 2.2D available-cash portfolio conversion
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS paper_schema_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            """)
+            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2d_available_cash_migration'")
+            if cur.fetchone()[0] == 0:
+                # Inspect active open positions in paper_positions
+                cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
+                open_margin = float(cur.fetchone()[0])
+
+                # Check current paper_portfolio
+                cur.execute("SELECT id, cash_balance, equity FROM paper_portfolio ORDER BY id DESC LIMIT 1")
+                port_row = cur.fetchone()
+                if port_row and open_margin > 0:
+                    p_id, p_cash, p_equity = port_row[0], float(port_row[1]), float(port_row[2])
+                    # If legacy Phase 2.2B balance: cash_balance did not have margin deducted
+                    if abs(p_cash - p_equity) < 1.0 or (p_cash + open_margin > p_equity):
+                        new_cash = max(0.0, p_cash - open_margin)
+                        conn.execute("UPDATE paper_portfolio SET cash_balance = ?, margin_used = ? WHERE id = ?", (new_cash, open_margin, p_id))
+                        logger.info(f"Phase 2.2D Migration: converted legacy portfolio cash ${p_cash:.2f} -> available cash ${new_cash:.2f} (margin: ${open_margin:.2f})")
+
+                now_mig_str = datetime.now(timezone.utc).isoformat()
+                conn.execute("INSERT INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2d_available_cash_migration', ?)", (now_mig_str,))
+
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")
             if cursor.fetchone()[0] == 0:
@@ -341,9 +368,18 @@ class PaperExecutionEngine:
             FROM paper_positions WHERE status = 'OPEN'
             """)
             for p_row in cursor.fetchall():
+                pos_id = p_row[0]
                 key = (p_row[1], p_row[2])
+
+                # Atomically reconcile accumulated funding from position_funding_payments
+                cur_f = conn.cursor()
+                cur_f.execute("SELECT COALESCE(SUM(payment_amount), 0.0) FROM position_funding_payments WHERE position_id = ?", (pos_id,))
+                p_sum = cur_f.fetchone()
+                payment_sum = float(p_sum[0]) if (p_sum and p_sum[0] is not None) else 0.0
+                acc_funding = payment_sum if payment_sum != 0.0 else float(p_row[12])
+
                 self.active_positions[key] = {
-                    "position_id": p_row[0],
+                    "position_id": pos_id,
                     "strategy_id": p_row[1],
                     "symbol": p_row[2],
                     "side": p_row[3],
@@ -355,7 +391,7 @@ class PaperExecutionEngine:
                     "stop_loss": float(p_row[9]),
                     "take_profit": float(p_row[10]),
                     "entry_time": p_row[11],
-                    "accumulated_funding": float(p_row[12]),
+                    "accumulated_funding": acc_funding,
                     "status": "OPEN"
                 }
 
@@ -579,17 +615,30 @@ class PaperExecutionEngine:
         qty = pos["quantity"]
         entry_price = pos["entry_price"]
 
-        # Determine Fill Price:
-        # Case A: Adverse Opening Gap (e.g. market opened gap beyond stop loss)
-        if adverse_gap_price is not None and adverse_gap_price > 0:
+        # Determine Fill Price based on Exit Reason:
+        if exit_reason in ["stop_loss", "stop_loss_collision"]:
+            # Stop-loss touch or same-bar SL/TP collision (stop-first): fill at stop level with adverse slippage
+            stop_px = float(pos["stop_loss"])
             if side == "LONG":
-                fill_price = self.quantize_price(symbol, adverse_gap_price * (1.0 - self.slippage_rate))
-                quote_used = adverse_gap_price
+                fill_price = self.quantize_price(symbol, stop_px * (1.0 - self.slippage_rate))
             else:
-                fill_price = self.quantize_price(symbol, adverse_gap_price * (1.0 + self.slippage_rate))
-                quote_used = adverse_gap_price
+                fill_price = self.quantize_price(symbol, stop_px * (1.0 + self.slippage_rate))
+            quote_used = stop_px
+        elif exit_reason == "stop_loss_gap":
+            # Adverse opening gap: fill from opening price with adverse slippage
+            gap_base = adverse_gap_price if (adverse_gap_price is not None and adverse_gap_price > 0) else float(pos["stop_loss"])
+            if side == "LONG":
+                fill_price = self.quantize_price(symbol, gap_base * (1.0 - self.slippage_rate))
+            else:
+                fill_price = self.quantize_price(symbol, gap_base * (1.0 + self.slippage_rate))
+            quote_used = gap_base
+        elif exit_reason == "take_profit":
+            # Take-profit target fill: clearly defined conservative target fill (exact target price, 0 slippage)
+            target_px = float(pos["take_profit"])
+            fill_price = self.quantize_price(symbol, target_px)
+            quote_used = target_px
         else:
-            # Case B: Standard Market Exit with Fresh Quote Validation
+            # Standard market exit (manual_exit, horizon_expiry, circuit_breaker): fresh quote validation
             best_bid, best_ask = self.validate_quote_freshness(quote)
             if side == "LONG":
                 fill_price = self.quantize_price(symbol, best_bid * (1.0 - self.slippage_rate))
@@ -705,18 +754,31 @@ class PaperExecutionEngine:
         bar_open: float,
         bar_high: float,
         bar_low: float,
-        bar_close: float
+        bar_close: float,
+        bar_close_time: Optional[int] = None
     ) -> Optional[Tuple[str, Optional[float]]]:
         """
         Evaluates intra-candle stop-loss and take-profit breaches with:
         1. Adverse opening gap detection.
         2. Strict stop-first resolution on ambiguous same-bar collisions.
+        3. Causality verification (rejects candles completed before position entry).
         Returns: (exit_reason, adverse_gap_price_or_none) or None.
         """
         key = (strategy_id, symbol)
         pos = self.active_positions.get(key)
         if not pos:
             return None
+
+        # Causality guard: Never use a candle completed before position entry to trigger stops/targets
+        if bar_close_time is not None:
+            try:
+                pos_entry_dt = datetime.fromisoformat(pos["entry_time"])
+                pos_entry_ms = int(pos_entry_dt.timestamp() * 1000)
+                if bar_close_time <= pos_entry_ms:
+                    logger.debug(f"Ignoring candle with close_time {bar_close_time} <= entry_time {pos_entry_ms}")
+                    return None
+            except Exception:
+                pass
 
         side = pos["side"]
         sl = pos["stop_loss"]
@@ -865,9 +927,29 @@ class PaperExecutionEngine:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?);
                     """, (payment_id, pos["position_id"], sett_time, f_rate, mark_px, payment, now_str))
 
-                    # Update position and cash
+                    # Atomically update position accumulated funding in DB
+                    conn.execute("""
+                    UPDATE paper_positions
+                    SET accumulated_funding = accumulated_funding + ?
+                    WHERE position_id = ?;
+                    """, (payment, pos["position_id"]))
+
+                    # Atomically update portfolio cash balance and equity in DB
+                    conn.execute("""
+                    UPDATE paper_portfolio
+                    SET cash_balance = cash_balance + ?,
+                        equity = equity + ?,
+                        peak_equity = MAX(peak_equity, equity + ?),
+                        timestamp = ?
+                    WHERE id = (SELECT MAX(id) FROM paper_portfolio);
+                    """, (payment, payment, payment, now_str))
+
+                    # Update in-memory state
                     pos["accumulated_funding"] += payment
-                    self.portfolio["cash_balance"] += payment  # positive payment increases cash, negative decreases
+                    self.portfolio["cash_balance"] += payment
+                    self.portfolio["equity"] += payment
+                    if self.portfolio["equity"] > self.portfolio["peak_equity"]:
+                        self.portfolio["peak_equity"] = self.portfolio["equity"]
                     settlements_applied += 1
                     logger.info(f"[{strat_id}] Funding Applied to {sym} ({pos['side']}): ${payment:+.4f} (Rate: {f_rate:.6f}, Settlement: {sett_time_dt.isoformat()})")
 

@@ -38,7 +38,8 @@ from paper.config import (
     CANDLE_4H_REQUIRED_1M_BARS,
     EXPECTED_1M_INTERVAL_MS,
     RISK_PCT_PER_TRADE,
-    MAX_LEVERAGE_CAP
+    MAX_LEVERAGE_CAP,
+    MAX_SIGNAL_AGE_SECONDS
 )
 from paper.execution import PaperExecutionEngine, StaleQuoteError
 
@@ -72,6 +73,7 @@ class CandidateAPaperRunner:
         self.symbol = symbol.upper()
         self.strategy_id = strategy_id
         self.strategy_version = strategy_version
+        self.last_processed_1m_open_time: Dict[str, int] = {}
 
         self._init_runner_tables()
 
@@ -461,10 +463,19 @@ class CandidateAPaperRunner:
                 logger.debug(f"Ignoring bar for {bar_sym}: runner is configured for {self.symbol}.")
                 return
 
+            # Deduplication: process each completed 1m candle only once
+            bar_ot = current_bar.get("open_time")
+            if bar_ot is not None:
+                if bar_ot <= self.last_processed_1m_open_time.get(self.symbol, -1):
+                    # Already processed this exact 1m completed candle
+                    return
+                self.last_processed_1m_open_time[self.symbol] = bar_ot
+
             b_open = float(current_bar.get("open", 0.0))
             b_high = float(current_bar.get("high", 0.0))
             b_low = float(current_bar.get("low", 0.0))
             b_close = float(current_bar.get("close", 0.0))
+            b_close_time = current_bar.get("close_time")
 
             trigger = self.exec_engine.check_position_stops_and_gaps(
                 strategy_id=self.strategy_id,
@@ -472,7 +483,8 @@ class CandidateAPaperRunner:
                 bar_open=b_open,
                 bar_high=b_high,
                 bar_low=b_low,
-                bar_close=b_close
+                bar_close=b_close,
+                bar_close_time=b_close_time
             )
             if trigger:
                 reason, gap_px = trigger
@@ -509,7 +521,11 @@ class CandidateAPaperRunner:
         except Exception as e:
             logger.error(f"Error checking horizon expiry: {e}")
 
-    def evaluate_new_completed_candles(self, quotes: Dict[str, Dict[str, Any]]) -> int:
+    def evaluate_new_completed_candles(
+        self,
+        quotes: Dict[str, Dict[str, Any]],
+        now_utc: Optional[datetime] = None
+    ) -> int:
         """
         Evaluates Candidate A on all newly completed, 240-bar-verified 4H candles.
         Processes missed candles sequentially upon restart and guarantees no duplicates.
@@ -554,8 +570,20 @@ class CandidateAPaperRunner:
             # Historical missed candles must be recorded for continuity but must NOT trigger retroactive entries at current prices.
             is_current_candle = (ts == df_4h.index[-1])
 
-            # If signal is actionable, genuinely current, and no position is open for this strategy
-            if is_current_candle and sig in ["LONG", "SHORT"] and key not in self.exec_engine.active_positions:
+            # Check maximum signal age: candle must not be older than MAX_SIGNAL_AGE_SECONDS
+            now_dt = now_utc or datetime.now(timezone.utc)
+            candle_close_dt = datetime.fromtimestamp(close_time / 1000.0, tz=timezone.utc)
+            signal_age_sec = (now_dt - candle_close_dt).total_seconds()
+            is_fresh_signal = (0 <= signal_age_sec <= MAX_SIGNAL_AGE_SECONDS)
+
+            if is_current_candle and not is_fresh_signal and sig in ["LONG", "SHORT"]:
+                logger.warning(
+                    f"Signal {sig} on current candle {ts} is stale ({signal_age_sec:.1f}s > {MAX_SIGNAL_AGE_SECONDS}s). "
+                    "Entry blocked."
+                )
+
+            # If signal is actionable, genuinely current, fresh, and no position is open for this strategy
+            if is_current_candle and is_fresh_signal and sig in ["LONG", "SHORT"] and key not in self.exec_engine.active_positions:
                 quote = quotes.get(self.symbol)
                 if not quote:
                     logger.warning(f"Valid signal {sig} on {self.symbol} but no fresh quote available. Entry deferred.")
