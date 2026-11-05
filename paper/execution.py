@@ -350,8 +350,10 @@ class PaperExecutionEngine:
                                 true_r_eq = r_eq
                             historical_true_equities.append(true_r_eq)
 
-                        # If p_peak > p_equity, peak was achieved before position opened (with margin 0), so preserve it!
-                        if p_peak > p_equity:
+                        # Check if p_peak was achieved when margin was zero (genuine peak before position opened)
+                        cur.execute("SELECT COUNT(*) FROM paper_portfolio WHERE margin_used = 0 AND (equity >= ? OR peak_equity >= ?)", (p_peak - 0.01, p_peak - 0.01))
+                        zero_margin_peak_count = cur.fetchone()[0]
+                        if zero_margin_peak_count > 0:
                             historical_true_equities.append(p_peak)
                         else:
                             historical_true_equities.append(p_peak - open_margin)
@@ -379,6 +381,31 @@ class PaperExecutionEngine:
 
                 now_mig_str = datetime.now(timezone.utc).isoformat()
                 conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2f_portfolio_migration', ?)", (now_mig_str,))
+                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2h_peak_equity_migration', ?)", (now_mig_str,))
+            else:
+                # Phase 2.2H Migration: Check and repair historical peak equity if previous peak occurred during open position
+                cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2h_peak_equity_migration'")
+                if cur.fetchone()[0] == 0:
+                    cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
+                    open_margin = float(cur.fetchone()[0])
+                    cur.execute("SELECT id, equity, peak_equity, cash_balance, margin_used FROM paper_portfolio ORDER BY id DESC LIMIT 1")
+                    last_p = cur.fetchone()
+                    if last_p and open_margin > 0:
+                        p_id, p_eq, p_pk, p_cb, p_mu = last_p
+                        p_eq, p_pk, p_cb, p_mu = float(p_eq), float(p_pk), float(p_cb), float(p_mu)
+                        cur.execute("SELECT COUNT(*) FROM paper_portfolio WHERE margin_used = 0 AND (equity >= ? OR peak_equity >= ?)", (p_pk - 0.01, p_pk - 0.01))
+                        if cur.fetchone()[0] == 0 and p_pk > p_eq and p_pk > initial_capital:
+                            corrected_peak = max(p_pk - open_margin, p_eq, initial_capital)
+                            corrected_dd = ((corrected_peak - p_eq) / corrected_peak * 100.0) if corrected_peak > 0 else 0.0
+                            conn.execute("""
+                            UPDATE paper_portfolio
+                            SET peak_equity = ?, drawdown_pct = ?
+                            WHERE id = ?
+                            """, (round(corrected_peak, 2), round(corrected_dd, 2), p_id))
+                            logger.info(f"Phase 2.2H Migration: repaired historical peak equity (${p_pk:.2f} -> ${corrected_peak:.2f})")
+
+                    now_mig_h = datetime.now(timezone.utc).isoformat()
+                    conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2h_peak_equity_migration', ?)", (now_mig_h,))
 
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")
@@ -602,10 +629,10 @@ class PaperExecutionEngine:
             logger.warning(f"Insufficient cash balance (${self.portfolio['cash_balance']:.2f}) for margin ${margin_req:.2f} + fee ${fee_usd:.2f}.")
             return None
 
-        # Deduct entry fee and reserve entry margin from available cash
-        self.portfolio["cash_balance"] -= (margin_req + fee_usd)
-        self.portfolio["margin_used"] += margin_req
-        self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"] + self.portfolio["unrealized_pnl"]
+        # Issue 6: Prepare accounting values without mutating in-memory state before DB commit
+        new_cash = self.portfolio["cash_balance"] - (margin_req + fee_usd)
+        new_margin = self.portfolio["margin_used"] + margin_req
+        new_equity = new_cash + new_margin + self.portfolio["unrealized_pnl"]
 
         now_str = entry_time_str or datetime.now(timezone.utc).isoformat()
         pos_id = f"{strategy_id}_{symbol}_{uuid.uuid4().hex[:8]}"
@@ -620,7 +647,7 @@ class PaperExecutionEngine:
             "quantity": quantized_qty,
             "notional": notional,
             "margin": margin_req,
-            "leverage": notional / self.portfolio["equity"] if self.portfolio["equity"] > 0 else 1.0,
+            "leverage": notional / new_equity if new_equity > 0 else 1.0,
             "stop_loss": self.quantize_price(symbol, stop_loss),
             "take_profit": self.quantize_price(symbol, take_profit),
             "entry_time": now_str,
@@ -650,6 +677,11 @@ class PaperExecutionEngine:
                 quantized_qty, notional, fee_usd, slippage_usd, now_str, now_str
             ))
             conn.commit()
+
+        # Update in-memory state ONLY AFTER successful database commit
+        self.portfolio["cash_balance"] = new_cash
+        self.portfolio["margin_used"] = new_margin
+        self.portfolio["equity"] = new_equity
 
         self.active_positions[key] = pos
         self._update_portfolio_leverage()
@@ -744,17 +776,39 @@ class PaperExecutionEngine:
         # 2. Funding was already applied to available cash during settlement in apply_settled_funding_rates.
         # 3. Therefore, cash balance update at close is ONLY: + margin_req + directional_pnl - exit_fee_usd.
         margin_req = pos["margin"]
-        self.portfolio["cash_balance"] += (margin_req + directional_pnl - exit_fee_usd)
-        self.portfolio["margin_used"] = max(0.0, self.portfolio["margin_used"] - margin_req)
-        self.portfolio["realized_pnl"] += net_pnl
-        self.portfolio["unrealized_pnl"] = 0.0
-        self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"]
+        new_cash = self.portfolio["cash_balance"] + (margin_req + directional_pnl - exit_fee_usd)
+        new_margin = max(0.0, self.portfolio["margin_used"] - margin_req)
+        new_realized = self.portfolio["realized_pnl"] + net_pnl
+
+        # Issue 5: Recalculate unrealized PnL and equity for all remaining open positions.
+        # Never reset portfolio-wide unrealized PnL to zero blindly!
+        remaining_unrealized = 0.0
+        for r_key, r_pos in self.active_positions.items():
+            if r_key == key:
+                continue
+            r_side = r_pos["side"]
+            r_entry = float(r_pos["entry_price"])
+            r_qty = float(r_pos["quantity"])
+            r_sym = r_pos["symbol"]
+
+            cur_px = None
+            if quote and r_sym == symbol:
+                cur_px = quote.get("mid_price") or quote.get("best_bid") or quote.get("best_ask")
+            if cur_px is None:
+                cur_px = float(r_pos.get("current_price", r_entry))
+
+            if r_side == "LONG":
+                u_pnl = (cur_px - r_entry) * r_qty
+            else:
+                u_pnl = (r_entry - cur_px) * r_qty
+            remaining_unrealized += u_pnl
+
+        new_unrealized = remaining_unrealized
+        new_equity = new_cash + new_margin + new_unrealized
 
         # Update Peak & Drawdown
-        if self.portfolio["equity"] > self.portfolio["peak_equity"]:
-            self.portfolio["peak_equity"] = self.portfolio["equity"]
-        peak = self.portfolio["peak_equity"]
-        self.portfolio["drawdown_pct"] = ((peak - self.portfolio["equity"]) / peak * 100.0) if peak > 0 else 0.0
+        new_peak = max(self.portfolio["peak_equity"], new_equity)
+        new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
 
         now_str = exit_time_str or datetime.now(timezone.utc).isoformat()
         trade_id = f"tr_{uuid.uuid4().hex[:8]}"
@@ -801,6 +855,15 @@ class PaperExecutionEngine:
                 round(slippage_cost, 4), round(net_pnl, 2), exit_reason
             ))
             conn.commit()
+
+        # Issue 6: Update in-memory state ONLY AFTER successful database commit
+        self.portfolio["cash_balance"] = new_cash
+        self.portfolio["margin_used"] = new_margin
+        self.portfolio["realized_pnl"] = new_realized
+        self.portfolio["unrealized_pnl"] = new_unrealized
+        self.portfolio["equity"] = new_equity
+        self.portfolio["peak_equity"] = new_peak
+        self.portfolio["drawdown_pct"] = new_drawdown
 
         del self.active_positions[key]
         self._update_portfolio_leverage()
@@ -969,11 +1032,13 @@ class PaperExecutionEngine:
     # Idempotent Funding Settlement Accounting
     # =========================================================================
 
-    def apply_settled_funding_rates(self) -> int:
+    def apply_settled_funding_rates(self, max_settlement_time_ms: Optional[int] = None) -> int:
         """
         Queries unapplied funding settlements from market_data.db and applies them
         to active virtual positions holding that symbol at settlement_time.
+        If max_settlement_time_ms is provided, settlements after that timestamp are excluded.
         Guarantees exact single-application (idempotency) via unique constraints.
+        Updates in-memory state ONLY after successful database commit.
         """
         if not os.path.exists(self.market_db_path) or not self.active_positions:
             return 0
@@ -984,15 +1049,24 @@ class PaperExecutionEngine:
         try:
             m_conn = sqlite3.connect(self.market_db_path, timeout=5.0)
             m_cur = m_conn.cursor()
-            m_cur.execute("SELECT symbol, settlement_time, funding_rate, mark_price FROM funding_settlements ORDER BY settlement_time ASC")
+            if max_settlement_time_ms is not None:
+                m_cur.execute(
+                    "SELECT symbol, settlement_time, funding_rate, mark_price FROM funding_settlements WHERE settlement_time <= ? ORDER BY settlement_time ASC",
+                    (int(max_settlement_time_ms),)
+                )
+            else:
+                m_cur.execute("SELECT symbol, settlement_time, funding_rate, mark_price FROM funding_settlements ORDER BY settlement_time ASC")
             settlement_rows = m_cur.fetchall()
             m_conn.close()
         except Exception as e:
             logger.error(f"Could not read funding_settlements from market_data.db: {e}")
             return 0
 
+        pending_payments = []
         with self._get_connection() as conn:
             for sym, sett_time, f_rate, mp in settlement_rows:
+                if max_settlement_time_ms is not None and sett_time > max_settlement_time_ms:
+                    continue
                 sett_time_dt = datetime.fromtimestamp(sett_time / 1000, tz=timezone.utc)
 
                 for (strat_id, pos_sym), pos in list(self.active_positions.items()):
@@ -1046,16 +1120,19 @@ class PaperExecutionEngine:
                     WHERE id = (SELECT MAX(id) FROM paper_portfolio);
                     """, (payment, payment, payment, now_str))
 
-                    # Update in-memory state
-                    pos["accumulated_funding"] += payment
-                    self.portfolio["cash_balance"] += payment
-                    self.portfolio["equity"] += payment
-                    if self.portfolio["equity"] > self.portfolio["peak_equity"]:
-                        self.portfolio["peak_equity"] = self.portfolio["equity"]
+                    pending_payments.append((pos, payment, strat_id, sym, f_rate, sett_time_dt))
                     settlements_applied += 1
-                    logger.info(f"[{strat_id}] Funding Applied to {sym} ({pos['side']}): ${payment:+.4f} (Rate: {f_rate:.6f}, Settlement: {sett_time_dt.isoformat()})")
 
             conn.commit()
+
+        # Issue 6: Update in-memory state ONLY AFTER successful database commit
+        for pos, payment, strat_id, sym, f_rate, sett_time_dt in pending_payments:
+            pos["accumulated_funding"] += payment
+            self.portfolio["cash_balance"] += payment
+            self.portfolio["equity"] += payment
+            if self.portfolio["equity"] > self.portfolio["peak_equity"]:
+                self.portfolio["peak_equity"] = self.portfolio["equity"]
+            logger.info(f"[{strat_id}] Funding Applied to {sym} ({pos['side']}): ${payment:+.4f} (Rate: {f_rate:.6f}, Settlement: {sett_time_dt.isoformat()})")
 
         if settlements_applied > 0:
             self.save_portfolio_snapshot()

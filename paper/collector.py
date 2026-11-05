@@ -305,6 +305,23 @@ class MarketDataCollector:
             logger.error(f"HTTP GET error for {url}: {e}")
             return None
 
+    def get_server_time(self) -> int:
+        """
+        Retrieves official Binance server time via /fapi/v1/time REST endpoint.
+        Falls back to latest market stream exchange_ts or local time if unavailable.
+        """
+        data = self._http_get_json("/fapi/v1/time")
+        if data and isinstance(data, dict) and "serverTime" in data:
+            return int(data["serverTime"])
+
+        last_ex = max(
+            self.stream_health.get("market", {}).get("last_exchange_ts", 0),
+            self.stream_health.get("public", {}).get("last_exchange_ts", 0)
+        )
+        if last_ex > 0:
+            return last_ex
+        return int(time.time() * 1000)
+
     def fetch_exchange_metadata(self) -> Dict[str, Dict[str, Any]]:
         """
         Polls /fapi/v1/exchangeInfo and /fapi/v1/fundingInfo to refresh contract specs.

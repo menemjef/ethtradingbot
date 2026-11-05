@@ -483,8 +483,11 @@ class CandidateAPaperRunner:
         - Applies any pending realized funding rate settlements.
         NOTE: Operates independently of the 4-hour strategy signal evaluation schedule!
         """
-        # Apply pending funding settlements
-        self.exec_engine.apply_settled_funding_rates()
+        # Issue 1: Apply pending funding settlements (timestamp bounded if current_bar is provided)
+        if current_bar and current_bar.get("close_time"):
+            self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=int(current_bar["close_time"]))
+        else:
+            self.exec_engine.apply_settled_funding_rates()
 
         # Update continuous portfolio MTM
         self.exec_engine.update_mark_to_market(quotes)
@@ -531,77 +534,114 @@ class CandidateAPaperRunner:
                     bar_open_time=b_open_time
                 )
 
-            # Persist processed candle to SQLite to guarantee persistence across restarts
-            if bar_ot is not None and b_close_time is not None:
-                try:
-                    with self._get_connection() as conn:
-                        conn.execute("""
-                        INSERT OR IGNORE INTO processed_1m_candles (
-                            strategy_id, symbol, open_time, close_time, processed_at
-                        ) VALUES (?, ?, ?, ?, ?)
-                        """, (
-                            self.strategy_id,
-                            self.symbol,
-                            int(bar_ot),
-                            int(b_close_time),
-                            now_str
-                        ))
-                    self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
-                except Exception as e:
-                    logger.debug(f"Could not persist processed 1m candle: {e}")
-
+            position_closed = False
             if trigger:
                 reason, gap_px = trigger
                 candle_exit_time = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc).isoformat() if b_close_time else now_str
+                self.exec_engine.close_position(
+                    strategy_id=self.strategy_id,
+                    symbol=self.symbol,
+                    exit_reason=reason,
+                    quote=None,
+                    adverse_gap_price=gap_px,
+                    candle_price=b_close,
+                    exit_time_str=candle_exit_time
+                )
+                position_closed = True
+            elif pos:
+                # Check horizon expiry against current bar
                 try:
+                    t_ent = datetime.fromisoformat(pos["entry_time"])
+                    if b_close_time:
+                        bar_dt = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc)
+                        hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
+                        if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                            candle_exit_time = bar_dt.isoformat()
+                            self.exec_engine.close_position(
+                                strategy_id=self.strategy_id,
+                                symbol=self.symbol,
+                                exit_reason="horizon_expiry",
+                                quote=None,
+                                candle_price=b_close,
+                                exit_time_str=candle_exit_time
+                            )
+                            position_closed = True
+                except Exception as e:
+                    logger.error(f"Error checking horizon expiry on bar: {e}")
+                    raise
+
+            # Issue 2: Atomic Candle Processing
+            # Persist processed candle to SQLite ONLY AFTER all position-management effects and DB commits have succeeded!
+            if bar_ot is not None and b_close_time is not None:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                    INSERT OR IGNORE INTO processed_1m_candles (
+                        strategy_id, symbol, open_time, close_time, processed_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        self.strategy_id,
+                        self.symbol,
+                        int(bar_ot),
+                        int(b_close_time),
+                        now_str
+                    ))
+                    conn.commit()
+                self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
+
+        elif pos and quote:
+            # Issue 3: Protecting existing position in real-time using fresh live quotes (e.g. during data gaps or between bars)
+            try:
+                best_bid, best_ask = self.exec_engine.validate_quote_freshness(quote)
+                side = pos["side"]
+                sl = pos["stop_loss"]
+                tp = pos["take_profit"]
+                tick_size = float(self.exec_engine.contract_specs.get(self.symbol, {}).get("tick_size", 0.01))
+
+                trigger_reason = None
+                if side == "LONG":
+                    sl_hit = best_bid <= sl
+                    tp_hit = best_bid >= (tp + tick_size - 1e-9)
+                    if sl_hit and tp_hit:
+                        trigger_reason = "stop_loss_collision"
+                    elif sl_hit:
+                        trigger_reason = "stop_loss"
+                    elif tp_hit:
+                        trigger_reason = "take_profit"
+                else:  # SHORT
+                    sl_hit = best_ask >= sl
+                    tp_hit = best_ask <= (tp - tick_size + 1e-9)
+                    if sl_hit and tp_hit:
+                        trigger_reason = "stop_loss_collision"
+                    elif sl_hit:
+                        trigger_reason = "stop_loss"
+                    elif tp_hit:
+                        trigger_reason = "take_profit"
+
+                if trigger_reason:
                     self.exec_engine.close_position(
                         strategy_id=self.strategy_id,
                         symbol=self.symbol,
-                        exit_reason=reason,
-                        quote=None,
-                        adverse_gap_price=gap_px,
-                        candle_price=b_close,
-                        exit_time_str=candle_exit_time
+                        exit_reason=trigger_reason,
+                        quote=quote,
+                        exit_time_str=now_str
                     )
-                    return
-                except StaleQuoteError as e:
-                    logger.warning(f"Could not execute position exit due to stale quote: {e}")
-
-        # Check 72-Hour Maximum Holding Horizon Expiry (if position is open)
-        if pos:
-            try:
-                t_ent = datetime.fromisoformat(pos["entry_time"])
-                if current_bar and current_bar.get("close_time"):
-                    bar_dt = datetime.fromtimestamp(int(current_bar["close_time"])/1000.0, tz=timezone.utc)
-                    hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
-                    candle_exit_time = bar_dt.isoformat()
-                    b_close = float(current_bar.get("close", 0.0))
+                else:
+                    # Check live 72-hour maximum holding horizon expiry
+                    t_ent = datetime.fromisoformat(pos["entry_time"])
+                    t_now = datetime.now(timezone.utc)
+                    hours_held = (t_now - t_ent).total_seconds() / 3600.0
                     if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
                         self.exec_engine.close_position(
                             strategy_id=self.strategy_id,
                             symbol=self.symbol,
                             exit_reason="horizon_expiry",
-                            quote=None,
-                            candle_price=b_close,
-                            exit_time_str=candle_exit_time
+                            quote=quote,
+                            exit_time_str=now_str
                         )
-                else:
-                    t_now = datetime.now(timezone.utc)
-                    hours_held = (t_now - t_ent).total_seconds() / 3600.0
-                    if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
-                        if quote:
-                            try:
-                                self.exec_engine.close_position(
-                                    strategy_id=self.strategy_id,
-                                    symbol=self.symbol,
-                                    exit_reason="horizon_expiry",
-                                    quote=quote,
-                                    exit_time_str=now_str
-                                )
-                            except StaleQuoteError as e:
-                                logger.warning(f"Could not close horizon expired position due to stale quote: {e}")
+            except StaleQuoteError as e:
+                logger.warning(f"Could not manage position with live quote: {e}")
             except Exception as e:
-                logger.error(f"Error checking horizon expiry: {e}")
+                logger.error(f"Error checking live quote triggers: {e}")
 
     def replay_missed_completed_1m_bars(self, quotes: Dict[str, Dict[str, Any]]) -> int:
         """
@@ -632,10 +672,18 @@ class CandidateAPaperRunner:
 
         # Determine exchange-adjusted reference timestamp strictly for self.symbol (no cross-symbol leakage)
         exchange_now = None
+        has_server_time = False
         if isinstance(quotes, dict):
             q = quotes.get(self.symbol, {})
             if isinstance(q, dict):
-                exchange_now = q.get("exchange_ts") or q.get("timestamp") or q.get("receipt_ts")
+                if q.get("server_time"):
+                    exchange_now = int(q["server_time"])
+                    has_server_time = True
+                elif q.get("exchange_ts"):
+                    exchange_now = int(q["exchange_ts"])
+                    has_server_time = True
+                else:
+                    exchange_now = q.get("timestamp") or q.get("receipt_ts")
         if not exchange_now:
             exchange_now = int(time.time() * 1000)
 
@@ -699,10 +747,28 @@ class CandidateAPaperRunner:
                 bars_to_process.append(b)
 
         if not bars_to_process:
+            # Issue 4: Detect missing trailing candles by comparing latest completed candle against reliable Binance server time,
+            # even when no subsequent candle arrives (empty batch).
+            if has_server_time and has_previous_processed and last_ot is not None and last_ot > 0:
+                if exchange_now >= last_ot + 2 * EXPECTED_1M_INTERVAL_MS:
+                    missing_trailing = int((exchange_now - (last_ot + EXPECTED_1M_INTERVAL_MS)) // EXPECTED_1M_INTERVAL_MS)
+                    if missing_trailing >= 1:
+                        self.gap_halted = True
+                        gap_info = {
+                            "symbol": self.symbol,
+                            "gap_start": last_ot + EXPECTED_1M_INTERVAL_MS,
+                            "gap_end": exchange_now,
+                            "missing_bars": missing_trailing,
+                            "flagged_at": datetime.now(timezone.utc).isoformat()
+                        }
+                        self.flagged_gap_periods.append(gap_info)
+                        msg = f"Missing trailing candle gap detected for {self.symbol} between latest bar {last_ot} and Binance server time {exchange_now} ({missing_trailing} missing bars)."
+                        logger.critical(msg)
+                        raise CandleGapError(msg, self.symbol, last_ot + EXPECTED_1M_INTERVAL_MS, exchange_now, missing_trailing)
             return 0
 
         # Issue 3: Verify chronological contiguous intervals without missing minutes
-        # Check gap between last_ot and first bar (if the runner previously processed candles)
+        # 1. Check gap between last_ot and first bar (if the runner previously processed candles)
         if has_previous_processed and last_ot is not None and last_ot > 0:
             expected_first_ot = last_ot + EXPECTED_1M_INTERVAL_MS
             first_ot = bars_to_process[0]["open_time"]
@@ -721,7 +787,7 @@ class CandidateAPaperRunner:
                 logger.critical(msg)
                 raise CandleGapError(msg, self.symbol, expected_first_ot, first_ot, missing)
 
-        # Check gaps between consecutive bars
+        # 2. Check gaps between consecutive bars
         for i in range(len(bars_to_process) - 1):
             curr_ot = bars_to_process[i]["open_time"]
             next_ot = bars_to_process[i + 1]["open_time"]
@@ -740,6 +806,25 @@ class CandidateAPaperRunner:
                 msg = f"Candle gap detected for {self.symbol} between bar {curr_ot} and {next_ot} ({missing} missing bars)."
                 logger.critical(msg)
                 raise CandleGapError(msg, self.symbol, expected_next, next_ot, missing)
+
+        # 3. Check trailing gap between last bar in batch and Binance server time
+        if has_server_time:
+            latest_bar_ot = bars_to_process[-1]["open_time"]
+            if exchange_now >= latest_bar_ot + 2 * EXPECTED_1M_INTERVAL_MS:
+                missing_trailing = int((exchange_now - (latest_bar_ot + EXPECTED_1M_INTERVAL_MS)) // EXPECTED_1M_INTERVAL_MS)
+                if missing_trailing >= 1:
+                    self.gap_halted = True
+                    gap_info = {
+                        "symbol": self.symbol,
+                        "gap_start": latest_bar_ot + EXPECTED_1M_INTERVAL_MS,
+                        "gap_end": exchange_now,
+                        "missing_bars": missing_trailing,
+                        "flagged_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    self.flagged_gap_periods.append(gap_info)
+                    msg = f"Missing trailing candle gap detected for {self.symbol} between latest bar {latest_bar_ot} and Binance server time {exchange_now} ({missing_trailing} missing bars)."
+                    logger.critical(msg)
+                    raise CandleGapError(msg, self.symbol, latest_bar_ot + EXPECTED_1M_INTERVAL_MS, exchange_now, missing_trailing)
 
         # Verified contiguous intervals without gaps: clear gap halt
         self.gap_halted = False

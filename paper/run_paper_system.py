@@ -442,9 +442,12 @@ async def run_full_system():
                 logger.critical(f"Candle gap detected during 1m replay: {e}. Halting new entries and skipping strategy evaluation until recovered.")
                 gap_occurred = True
 
-            # Update mark-to-market and check horizon expiry (only if continuity intact)
-            if not gap_occurred:
-                runner.process_incoming_market_tick(quotes)
+            # Issue 3: Protect existing positions using fresh live quotes EVEN during data gaps
+            # Never pass stale candles (current_bar=None enforces live quote protection)
+            try:
+                runner.process_incoming_market_tick(quotes, current_bar=None)
+            except Exception as e:
+                logger.error(f"Error managing existing positions with live quotes: {e}")
 
             # 2. Evaluate strategy on completed, 240-bar-verified 4H candles (only if continuity intact and not halted)
             if not gap_occurred and not runner.gap_halted:
