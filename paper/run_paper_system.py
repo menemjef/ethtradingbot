@@ -435,18 +435,23 @@ async def run_full_system():
                 exec_engine.update_mark_to_market(quotes)
 
             # 1. Replay missed completed 1m candles chronologically to ensure open positions receive every eligible bar
+            gap_occurred = False
             try:
                 runner.replay_missed_completed_1m_bars(quotes)
             except CandleGapError as e:
-                logger.critical(f"Candle gap detected during 1m replay: {e}. Failing closed to prevent unmonitored risk.")
-            # Update mark-to-market and check horizon expiry
-            runner.process_incoming_market_tick(quotes)
+                logger.critical(f"Candle gap detected during 1m replay: {e}. Halting new entries and skipping strategy evaluation until recovered.")
+                gap_occurred = True
 
-            # 2. Evaluate strategy on completed, 240-bar-verified 4H candles
-            try:
-                runner.evaluate_new_completed_candles(quotes)
-            except Exception as e:
-                logger.error(f"Error evaluating completed candles: {e}", exc_info=True)
+            # Update mark-to-market and check horizon expiry (only if continuity intact)
+            if not gap_occurred:
+                runner.process_incoming_market_tick(quotes)
+
+            # 2. Evaluate strategy on completed, 240-bar-verified 4H candles (only if continuity intact and not halted)
+            if not gap_occurred and not runner.gap_halted:
+                try:
+                    runner.evaluate_new_completed_candles(quotes)
+                except Exception as e:
+                    logger.error(f"Error evaluating completed candles: {e}", exc_info=True)
 
             # Sleep 5 seconds before next management cycle
             try:

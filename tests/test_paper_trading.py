@@ -1929,8 +1929,9 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         collector = MarketDataCollector(symbols=["ETHUSDT"], db_path=self.market_db)
         exchange_now = 1700000100000
 
-        # Set stream health exchange_ts
+        # Set stream health exchange_ts and symbol health exchange_ts
         collector.stream_health["market"]["last_exchange_ts"] = exchange_now
+        collector.symbol_health["ETHUSDT"]["last_market_exchange_ts"] = exchange_now
 
         # 1. Test REST Backfill: mock Binance REST response with 2 candles
         mock_raw_data = [
@@ -2045,6 +2046,258 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
 
         # Fail closed: last_processed_1m_open_time MUST NOT have advanced past the gap!
         self.assertEqual(runner.last_processed_1m_open_time["ETHUSDT"], base_ot)
+
+    # -------------------------------------------------------------------------
+    # Test 38: CandleGapError Halts Evaluation and New Entries Until Recovered
+    # -------------------------------------------------------------------------
+    def test_38_candle_gap_error_halts_evaluation_and_new_entries_until_recovered(self):
+        """Test 38: Verify CandleGapError genuinely halts new entries and strategy evaluation until missing data is recovered."""
+        m_db = os.path.join(self.test_dir, "test_market_38.db")
+        p_db = os.path.join(self.test_dir, "test_paper_38.db")
+        c = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del c
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=10000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        base_ot = 1700000000000
+        # Mark runner as having processed base_ot
+        with runner._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO processed_1m_candles (strategy_id, symbol, open_time, close_time, processed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """, (runner.strategy_id, "ETHUSDT", base_ot, base_ot + 59999, "2024-01-01T00:00:00Z"))
+        runner._load_processed_1m_open_times()
+
+        # Insert candle with a gap (skip base_ot + 60,000, insert base_ot + 120,000)
+        with sqlite3.connect(m_db) as conn:
+            conn.execute("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, ("ETHUSDT", "1m", base_ot + 120000, base_ot + 179999, 3000.0, 3010.0, 2990.0, 3005.0, 10.0, 30000.0, 5.0, 50, base_ot + 200000, base_ot + 179999))
+
+        quotes = {
+            "ETHUSDT": {
+                "bid": 3005.0, "ask": 3005.10, "exchange_ts": base_ot + 200000, "receipt_ts": base_ot + 200000, "timestamp": base_ot + 200000
+            }
+        }
+
+        # 1. Replay detects gap and raises CandleGapError
+        with self.assertRaises(CandleGapError):
+            runner.replay_missed_completed_1m_bars(quotes)
+
+        # 2. Verify runner is marked gap_halted = True
+        self.assertTrue(runner.gap_halted)
+
+        # 3. Strategy evaluation MUST be completely halted (returns 0 and blocks all entries)
+        evals = runner.evaluate_new_completed_candles(quotes)
+        self.assertEqual(evals, 0)
+        self.assertEqual(len(engine.active_positions), 0)
+
+        # 4. Recover missing data: insert the missing candle at base_ot + 60,000
+        with sqlite3.connect(m_db) as conn:
+            conn.execute("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, ("ETHUSDT", "1m", base_ot + 60000, base_ot + 119999, 3000.0, 3010.0, 2990.0, 3002.0, 10.0, 30000.0, 5.0, 50, base_ot + 200000, base_ot + 119999))
+
+        # 5. Replay now succeeds and verifies continuity
+        processed = runner.replay_missed_completed_1m_bars(quotes)
+        self.assertEqual(processed, 2)
+        # Gap halt MUST be cleared once continuity is verified!
+        self.assertFalse(runner.gap_halted)
+
+    # -------------------------------------------------------------------------
+    # Test 39: Stop-Loss, Take-Profit, and Adverse Gap Execution (Long & Short)
+    # -------------------------------------------------------------------------
+    def test_39_stop_loss_take_profit_and_adverse_gap_execution_long_and_short(self):
+        """Test 39: Verify exact execution fills for SL touch, TP trade-through, and adverse gap for Long and Short."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=50000.0)
+        now_dt = datetime.now(timezone.utc)
+        now_ms = int(now_dt.timestamp() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+        slip = engine.slippage_rate  # 0.0005
+
+        # --- CASE A: LONG POSITIONS ---
+        # 1. Long Stop Loss Touch (low touches SL)
+        engine.open_position("SL_Touch_L", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=now_dt.isoformat())
+        res_sl_l = engine.close_position("SL_Touch_L", "ETHUSDT", "stop_loss")
+        expected_sl_px_l = engine.quantize_price("ETHUSDT", 2900.0 * (1.0 - slip))
+        self.assertAlmostEqual(res_sl_l["exit_price"], expected_sl_px_l, places=2)
+
+        # 2. Long Take Profit (conservative target fill at exact TP)
+        engine.open_position("TP_L", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=now_dt.isoformat())
+        res_tp_l = engine.close_position("TP_L", "ETHUSDT", "take_profit")
+        self.assertAlmostEqual(res_tp_l["exit_price"], 3200.00, places=2)
+
+        # 3. Long Adverse Gap (bar opens below SL)
+        engine.open_position("Gap_L", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=now_dt.isoformat())
+        res_gap_l = engine.close_position("Gap_L", "ETHUSDT", "stop_loss_gap", adverse_gap_price=2850.0)
+        expected_gap_px_l = engine.quantize_price("ETHUSDT", 2850.0 * (1.0 - slip))
+        self.assertAlmostEqual(res_gap_l["exit_price"], expected_gap_px_l, places=2)
+
+        # 4. Long Stop-First Collision (both SL and TP hit in same bar)
+        engine.open_position("Col_L", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=now_dt.isoformat())
+        res_col_l = engine.close_position("Col_L", "ETHUSDT", "stop_loss_collision")
+        self.assertAlmostEqual(res_col_l["exit_price"], expected_sl_px_l, places=2)
+
+        # --- CASE B: SHORT POSITIONS ---
+        # 1. Short Stop Loss Touch (high touches SL)
+        engine.open_position("SL_Touch_S", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote, entry_time_str=now_dt.isoformat())
+        res_sl_s = engine.close_position("SL_Touch_S", "ETHUSDT", "stop_loss")
+        expected_sl_px_s = engine.quantize_price("ETHUSDT", 3100.0 * (1.0 + slip))
+        self.assertAlmostEqual(res_sl_s["exit_price"], expected_sl_px_s, places=2)
+
+        # 2. Short Take Profit (conservative target fill at exact TP)
+        engine.open_position("TP_S", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote, entry_time_str=now_dt.isoformat())
+        res_tp_s = engine.close_position("TP_S", "ETHUSDT", "take_profit")
+        self.assertAlmostEqual(res_tp_s["exit_price"], 2800.00, places=2)
+
+        # 3. Short Adverse Gap (bar opens above SL)
+        engine.open_position("Gap_S", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote, entry_time_str=now_dt.isoformat())
+        res_gap_s = engine.close_position("Gap_S", "ETHUSDT", "stop_loss_gap", adverse_gap_price=3150.0)
+        expected_gap_px_s = engine.quantize_price("ETHUSDT", 3150.0 * (1.0 + slip))
+        self.assertAlmostEqual(res_gap_s["exit_price"], expected_gap_px_s, places=2)
+
+        # 4. Short Stop-First Collision (both SL and TP hit in same bar)
+        engine.open_position("Col_S", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote, entry_time_str=now_dt.isoformat())
+        res_col_s = engine.close_position("Col_S", "ETHUSDT", "stop_loss_collision")
+        self.assertAlmostEqual(res_col_s["exit_price"], expected_sl_px_s, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 40: Historical Replay Never Uses Current Live Quote as Fill Price
+    # -------------------------------------------------------------------------
+    def test_40_historical_replay_never_uses_current_live_quote_as_fill_price(self):
+        """Test 40: Verify historical replay uses historical candle close/triggers for fills, never live quotes."""
+        m_db = os.path.join(self.test_dir, "test_market_40.db")
+        p_db = os.path.join(self.test_dir, "test_paper_40.db")
+        c = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del c
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=20000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        # Position entered at historical timestamp
+        hist_entry_time = "2024-01-01T12:00:00+00:00"
+        hist_entry_dt = datetime.fromisoformat(hist_entry_time)
+        hist_entry_ms = int(hist_entry_dt.timestamp() * 1000)
+
+        now_ms = int(time.time() * 1000)
+        hist_quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+        engine.open_position(
+            strategy_id=runner.strategy_id,
+            symbol="ETHUSDT",
+            side="LONG",
+            quantity=1.0,
+            stop_loss=2900.0,
+            take_profit=3200.0,
+            quote=hist_quote,
+            entry_time_str=hist_entry_time
+        )
+
+        # Set live quotes to completely different wild price (e.g. $8,000)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        wild_live_quotes = {
+            "ETHUSDT": {
+                "bid": 8000.0,
+                "ask": 8001.0,
+                "best_bid": 8000.0,
+                "best_ask": 8001.0,
+                "mid_price": 8000.5,
+                "receipt_ts": now_ms,
+                "exchange_ts": now_ms,
+                "timestamp": now_ms
+            }
+        }
+
+        # Historical candle 10 minutes later that hits Stop Loss (low: 2890.0, open: 2950.0, close: 2895.0)
+        hist_bar_ot = hist_entry_ms + 600000
+        hist_bar_ct = hist_bar_ot + 59999
+        hist_candle = {
+            "symbol": "ETHUSDT",
+            "open_time": hist_bar_ot,
+            "close_time": hist_bar_ct,
+            "open": 2950.0,
+            "high": 2960.0,
+            "low": 2890.0,  # Breaches 2900 SL
+            "close": 2895.0
+        }
+
+        runner.process_incoming_market_tick(wild_live_quotes, current_bar=hist_candle)
+
+        # Position must be closed
+        self.assertNotIn((runner.strategy_id, "ETHUSDT"), engine.active_positions)
+
+        # Retrieve the completed trade from SQLite
+        with engine._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+            SELECT exit_price, exit_reason, exit_time FROM paper_trades
+            WHERE strategy_id = ? AND symbol = 'ETHUSDT'
+            ORDER BY rowid DESC LIMIT 1
+            """, (runner.strategy_id,))
+            row = cur.fetchone()
+
+        self.assertIsNotNone(row)
+        exit_price, exit_reason, exit_time = row
+        self.assertEqual(exit_reason, "stop_loss")
+
+        # Fill price MUST be based on the historical stop price 2900 * (1 - slip), NEVER on the live $8000 quote!
+        expected_sl_px = engine.quantize_price("ETHUSDT", 2900.0 * (1.0 - engine.slippage_rate))
+        self.assertAlmostEqual(exit_price, expected_sl_px, places=2)
+        self.assertNotAlmostEqual(exit_price, 8000.0, places=0)
+
+        # Exit time MUST match the historical candle close time, not current time!
+        expected_exit_time = datetime.fromtimestamp(hist_bar_ct / 1000.0, tz=timezone.utc).isoformat()
+        self.assertEqual(exit_time, expected_exit_time)
+
+    # -------------------------------------------------------------------------
+    # Test 41: REST Candle Completion Symbol Isolation (Delayed ETH vs Newer BTC)
+    # -------------------------------------------------------------------------
+    def test_41_rest_candle_completion_symbol_isolation_delayed_eth_newer_btc(self):
+        """Test 41: Verify REST candle completion uses symbol-specific exchange timing and ignores newer BTC events."""
+        m_db = os.path.join(self.test_dir, "test_market_41.db")
+        collector = MarketDataCollector(symbols=["ETHUSDT", "BTCUSDT"], db_path=m_db)
+
+        # Set up delayed ETH market stream, but newer BTC market stream and public stream
+        eth_ex_ts = 1700000050000
+        btc_ex_ts = 1700000500000
+        pub_ex_ts = 1700000500000
+
+        collector.symbol_health["ETHUSDT"]["last_market_exchange_ts"] = eth_ex_ts
+        collector.symbol_health["ETHUSDT"]["last_kline_exchange_ts"] = eth_ex_ts
+
+        collector.symbol_health["BTCUSDT"]["last_market_exchange_ts"] = btc_ex_ts
+        collector.symbol_health["BTCUSDT"]["last_kline_exchange_ts"] = btc_ex_ts
+
+        collector.stream_health["market"]["last_exchange_ts"] = btc_ex_ts
+        collector.stream_health["public"]["last_exchange_ts"] = pub_ex_ts
+
+        # Mock REST API response for ETHUSDT:
+        # Candle 1: close_time 1700000049999 (< eth_ex_ts 1700000050000) -> COMPLETED
+        # Candle 2: close_time 1700000099999 (>= eth_ex_ts, but < btc_ex_ts) -> UNFINISHED ON ETH!
+        mock_raw_data = [
+            [1700000000000, "3000.0", "3010.0", "2990.0", "3005.0", "10.0", 1700000049999, "30000.0", 50, "5.0", "15000.0", "0"],
+            [1700000050000, "3005.0", "3015.0", "3000.0", "3010.0", "15.0", 1700000099999, "45000.0", 75, "7.0", "21000.0", "0"]
+        ]
+
+        with unittest.mock.patch("urllib.request.urlopen") as mock_url:
+            mock_resp = unittest.mock.MagicMock()
+            mock_resp.read.return_value = json.dumps(mock_raw_data).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            mock_url.return_value = mock_resp
+
+            klines = collector.fetch_rest_klines("ETHUSDT", interval="1m", limit=2)
+
+        # Candle 2 MUST be excluded because its close_time exceeds ETH's exchange timestamp!
+        # BTC's newer exchange timestamp must NOT cause unfinished ETH candle to be marked completed!
+        self.assertEqual(len(klines), 1)
+        self.assertEqual(klines[0]["open_time"], 1700000000000)
+        self.assertEqual(klines[0]["close_time"], 1700000049999)
 
 
 if __name__ == "__main__":

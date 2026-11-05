@@ -85,6 +85,7 @@ class CandidateAPaperRunner:
         self.strategy_version = strategy_version
         self.last_processed_1m_open_time: Dict[str, int] = {}
         self.flagged_gap_periods: List[Dict[str, Any]] = []
+        self.gap_halted: bool = False
 
         self._init_runner_tables()
         self._load_processed_1m_open_times()
@@ -551,14 +552,16 @@ class CandidateAPaperRunner:
 
             if trigger:
                 reason, gap_px = trigger
+                candle_exit_time = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc).isoformat() if b_close_time else now_str
                 try:
                     self.exec_engine.close_position(
                         strategy_id=self.strategy_id,
                         symbol=self.symbol,
                         exit_reason=reason,
-                        quote=quote,
+                        quote=None,
                         adverse_gap_price=gap_px,
-                        exit_time_str=now_str
+                        candle_price=b_close,
+                        exit_time_str=candle_exit_time
                     )
                     return
                 except StaleQuoteError as e:
@@ -568,20 +571,35 @@ class CandidateAPaperRunner:
         if pos:
             try:
                 t_ent = datetime.fromisoformat(pos["entry_time"])
-                t_now = datetime.now(timezone.utc)
-                hours_held = (t_now - t_ent).total_seconds() / 3600.0
-                if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
-                    if quote:
-                        try:
-                            self.exec_engine.close_position(
-                                strategy_id=self.strategy_id,
-                                symbol=self.symbol,
-                                exit_reason="horizon_expiry",
-                                quote=quote,
-                                exit_time_str=now_str
-                            )
-                        except StaleQuoteError as e:
-                            logger.warning(f"Could not close horizon expired position due to stale quote: {e}")
+                if current_bar and current_bar.get("close_time"):
+                    bar_dt = datetime.fromtimestamp(int(current_bar["close_time"])/1000.0, tz=timezone.utc)
+                    hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
+                    candle_exit_time = bar_dt.isoformat()
+                    b_close = float(current_bar.get("close", 0.0))
+                    if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                        self.exec_engine.close_position(
+                            strategy_id=self.strategy_id,
+                            symbol=self.symbol,
+                            exit_reason="horizon_expiry",
+                            quote=None,
+                            candle_price=b_close,
+                            exit_time_str=candle_exit_time
+                        )
+                else:
+                    t_now = datetime.now(timezone.utc)
+                    hours_held = (t_now - t_ent).total_seconds() / 3600.0
+                    if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                        if quote:
+                            try:
+                                self.exec_engine.close_position(
+                                    strategy_id=self.strategy_id,
+                                    symbol=self.symbol,
+                                    exit_reason="horizon_expiry",
+                                    quote=quote,
+                                    exit_time_str=now_str
+                                )
+                            except StaleQuoteError as e:
+                                logger.warning(f"Could not close horizon expired position due to stale quote: {e}")
             except Exception as e:
                 logger.error(f"Error checking horizon expiry: {e}")
 
@@ -612,18 +630,12 @@ class CandidateAPaperRunner:
         else:
             has_previous_processed = True
 
-        # Determine exchange-adjusted reference timestamp
+        # Determine exchange-adjusted reference timestamp strictly for self.symbol (no cross-symbol leakage)
         exchange_now = None
         if isinstance(quotes, dict):
             q = quotes.get(self.symbol, {})
             if isinstance(q, dict):
                 exchange_now = q.get("exchange_ts") or q.get("timestamp") or q.get("receipt_ts")
-            if not exchange_now:
-                for sym_q in quotes.values():
-                    if isinstance(sym_q, dict):
-                        exchange_now = sym_q.get("exchange_ts") or sym_q.get("timestamp") or sym_q.get("receipt_ts")
-                        if exchange_now:
-                            break
         if not exchange_now:
             exchange_now = int(time.time() * 1000)
 
@@ -695,6 +707,7 @@ class CandidateAPaperRunner:
             expected_first_ot = last_ot + EXPECTED_1M_INTERVAL_MS
             first_ot = bars_to_process[0]["open_time"]
             if first_ot > expected_first_ot:
+                self.gap_halted = True
                 missing = int((first_ot - expected_first_ot) // EXPECTED_1M_INTERVAL_MS)
                 gap_info = {
                     "symbol": self.symbol,
@@ -714,6 +727,7 @@ class CandidateAPaperRunner:
             next_ot = bars_to_process[i + 1]["open_time"]
             expected_next = curr_ot + EXPECTED_1M_INTERVAL_MS
             if next_ot > expected_next:
+                self.gap_halted = True
                 missing = int((next_ot - expected_next) // EXPECTED_1M_INTERVAL_MS)
                 gap_info = {
                     "symbol": self.symbol,
@@ -726,6 +740,9 @@ class CandidateAPaperRunner:
                 msg = f"Candle gap detected for {self.symbol} between bar {curr_ot} and {next_ot} ({missing} missing bars)."
                 logger.critical(msg)
                 raise CandleGapError(msg, self.symbol, expected_next, next_ot, missing)
+
+        # Verified contiguous intervals without gaps: clear gap halt
+        self.gap_halted = False
 
         processed_count = 0
         for bar in bars_to_process:
@@ -743,6 +760,12 @@ class CandidateAPaperRunner:
         Evaluates Candidate A on all newly completed, 240-bar-verified 4H candles.
         Processes missed candles sequentially upon restart and guarantees no duplicates.
         """
+        if self.gap_halted:
+            logger.warning(
+                f"Candidate A strategy evaluation halted for {self.symbol} due to active candle gap. All new entries blocked."
+            )
+            return 0
+
         df_4h, rejected = self.validate_and_build_4h_candles(self.symbol)
         if df_4h.empty or len(df_4h) < 60:
             return 0

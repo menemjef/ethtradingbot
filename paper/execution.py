@@ -664,11 +664,13 @@ class PaperExecutionEngine:
         exit_reason: str,
         quote: Optional[Dict[str, Any]] = None,
         adverse_gap_price: Optional[float] = None,
-        exit_time_str: Optional[str] = None
+        exit_time_str: Optional[str] = None,
+        candle_price: Optional[float] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Closes an open position with realistic fee, adverse slippage, and separated PnL accounting.
         Supports adverse opening gap fills when triggered by a gap beyond stop-loss.
+        Guarantees that historical candle replays never use live quotes as fill prices.
         """
         key = (strategy_id, symbol)
         pos = self.active_positions.get(key)
@@ -702,8 +704,17 @@ class PaperExecutionEngine:
             target_px = float(pos["take_profit"])
             fill_price = self.quantize_price(symbol, target_px)
             quote_used = target_px
+        elif candle_price is not None and candle_price > 0:
+            # Historical candle exit (e.g. horizon expiry or bar close during replay):
+            # Fill strictly using the candle price with adverse slippage, NEVER live quotes
+            c_px = float(candle_price)
+            if side == "LONG":
+                fill_price = self.quantize_price(symbol, c_px * (1.0 - self.slippage_rate))
+            else:
+                fill_price = self.quantize_price(symbol, c_px * (1.0 + self.slippage_rate))
+            quote_used = c_px
         else:
-            # Standard market exit (manual_exit, horizon_expiry, circuit_breaker): fresh quote validation
+            # Standard real-time market exit (manual_exit, live horizon_expiry, circuit_breaker): fresh quote validation
             best_bid, best_ask = self.validate_quote_freshness(quote)
             if side == "LONG":
                 fill_price = self.quantize_price(symbol, best_bid * (1.0 - self.slippage_rate))

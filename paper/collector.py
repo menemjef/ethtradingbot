@@ -111,8 +111,12 @@ class MarketDataCollector:
             s: {
                 "last_kline_receipt_ts": 0,
                 "last_kline_open_time": 0,
+                "last_kline_exchange_ts": 0,
+                "last_market_exchange_ts": 0,
                 "last_book_receipt_ts": 0,
+                "last_book_exchange_ts": 0,
                 "last_mark_receipt_ts": 0,
+                "last_mark_exchange_ts": 0,
                 "last_oi_poll_ts": 0
             } for s in self.symbols
         }
@@ -525,19 +529,34 @@ class MarketDataCollector:
             return []
 
         receipt_ts = int(time.time() * 1000)
-        # Determine exchange-adjusted reference timestamp
-        last_ex = max(
-            self.stream_health.get("market", {}).get("last_exchange_ts", 0),
-            self.stream_health.get("public", {}).get("last_exchange_ts", 0)
+        # Determine reliable symbol-specific exchange timing (do NOT use unrelated streams or symbols)
+        sym_health = self.symbol_health.get(symbol, {})
+        sym_market_ex = max(
+            sym_health.get("last_market_exchange_ts", 0),
+            sym_health.get("last_kline_exchange_ts", 0)
         )
-        ref_time_ms = last_ex if last_ex > 0 else receipt_ts
+        if sym_market_ex == 0 and len(self.symbols) == 1:
+            sym_market_ex = self.stream_health.get("market", {}).get("last_exchange_ts", 0)
+        ref_time_ms = sym_market_ex if sym_market_ex > 0 else receipt_ts
 
         klines = []
-        for row in data:
+        n_rows = len(data)
+        for i, row in enumerate(data):
             c_close_time = int(row[6])
-            # Filter out unfinished candles: close_time must be strictly earlier than current exchange-adjusted time
-            if c_close_time >= ref_time_ms:
-                logger.debug(f"Skipping unfinished REST candle: close_time {c_close_time} >= ref_time {ref_time_ms}")
+            # Symbol-specific exchange timing and completed-kline confirmation:
+            # 1. When symbol-specific market exchange time is available, candle MUST close before that exchange time
+            if sym_market_ex > 0 and c_close_time >= sym_market_ex:
+                logger.debug(f"[{symbol}] Skipping unfinished REST candle: close_time {c_close_time} >= symbol exchange_ts {sym_market_ex}")
+                continue
+
+            # 2. When symbol exchange time is not available, fallback to receipt_ts
+            if sym_market_ex == 0 and c_close_time >= receipt_ts:
+                logger.debug(f"[{symbol}] Skipping unfinished REST candle: close_time {c_close_time} >= receipt_ts {receipt_ts}")
+                continue
+
+            # 3. For the last candle in response, verify completion against reference time
+            if i == n_rows - 1 and c_close_time >= ref_time_ms:
+                logger.debug(f"[{symbol}] Skipping last unfinished REST candle: close_time {c_close_time} >= ref_time {ref_time_ms}")
                 continue
 
             klines.append({
@@ -622,6 +641,11 @@ class MarketDataCollector:
         if sym in self.symbol_health:
             self.symbol_health[sym]["last_kline_receipt_ts"] = receipt_ts
             self.symbol_health[sym]["last_kline_open_time"] = open_time
+            self.symbol_health[sym]["last_kline_exchange_ts"] = exchange_ts
+            self.symbol_health[sym]["last_market_exchange_ts"] = max(
+                self.symbol_health[sym].get("last_market_exchange_ts", 0),
+                exchange_ts
+            )
 
         # Gap detection
         last_t = self.last_kline_open_time.get(sym)
@@ -673,6 +697,7 @@ class MarketDataCollector:
         self.stream_health["public"]["last_exchange_ts"] = exchange_ts
         if sym in self.symbol_health:
             self.symbol_health[sym]["last_book_receipt_ts"] = receipt_ts
+            self.symbol_health[sym]["last_book_exchange_ts"] = exchange_ts
 
         spread = max(0.0, b_ask - b_bid)
         spread_bps = ((spread / b_bid) * 10000.0) if b_bid > 0 else 0.0
@@ -768,6 +793,11 @@ class MarketDataCollector:
         self.stream_health["market"]["last_exchange_ts"] = exchange_ts
         if sym in self.symbol_health:
             self.symbol_health[sym]["last_mark_receipt_ts"] = receipt_ts
+            self.symbol_health[sym]["last_mark_exchange_ts"] = exchange_ts
+            self.symbol_health[sym]["last_market_exchange_ts"] = max(
+                self.symbol_health[sym].get("last_market_exchange_ts", 0),
+                exchange_ts
+            )
 
         mark_info = {
             "symbol": sym,
