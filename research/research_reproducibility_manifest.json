@@ -1,7 +1,7 @@
 {
-  "manifest_version": "2.1.0",
-  "phase": "Quant Phase 2.1 Backtest Integrity Repair & Candidate Revalidation",
-  "timestamp_utc": "2026-11-05T04:18:51.515282+00:00",
+  "manifest_version": "2.2.0",
+  "phase": "Quant Phase 2.2A Statistical Audit, Edge Attribution & Live Paper Infrastructure",
+  "timestamp_utc": "2026-11-05T05:32:46.771799+00:00",
   "git_branch": "fix/execution-safety-and-backtest-integrity",
   "execution_safety_flags": {
     "TRADING_ENABLED": false,
@@ -24,6 +24,13 @@
       "normalized_matched_settlements": 4090,
       "missed_settlements": 0,
       "mean_rate_bps": 0.653
+    },
+    "btc_usdt_1h_3yr": {
+      "path": "data/cache/btc_usdt_1h_3yr.parquet",
+      "sha256": "a391cec980775ea81429144eaaf38d0a15296bd5f7a77c3c0fdcb6c2e3147972",
+      "rows": 32720,
+      "range_start": "2023-02-10 11:00:00+00:00",
+      "range_end": "2026-11-04 18:00:00+00:00"
     }
   },
   "walk_forward_folds": [
@@ -84,5 +91,67 @@
     "research/phase_2_1_candidate_comparison.md",
     "tests/test_phase_2_1_corrections.py",
     "research/scripts/run_phase_2_1_research.py"
-  ]
+  ],
+  "phase_2_2a_artifacts": {
+    "statistical_audit_report_md": {
+      "path": "research/statistical_audit_report.md",
+      "sha256": "a33b9f6ac2d3a12594ef20b3730be26a37df8a24e40c2f7e8a54aae09121cac1"
+    },
+    "candidate_a_attribution_report_md": {
+      "path": "research/candidate_a_attribution_report.md",
+      "sha256": "22454b44fce086ac78da52ace17fb5d30769021e4c9662b12ceda89d1a47d66c"
+    },
+    "candidate_a_attribution_json": {
+      "path": "research/candidate_a_attribution.json",
+      "sha256": "501d7614455c3048280b21dec704d8575fb54183e3534b936c2406cdaaf67a85"
+    },
+    "candidate_a_trade_attribution_csv": {
+      "path": "research/candidate_a_trade_attribution.csv",
+      "sha256": "8b407a1dc237970eb44b0f6e5af2f565f1919071f3de89ccb2e1110d0db5ef7b"
+    },
+    "experiment_registry_json": {
+      "path": "research/experiment_registry.json",
+      "sha256": "9b42851f546da219232e6e55cf1edf534a13a27555c5049b2b7caefb2251fb16"
+    },
+    "experiment_registry_md": {
+      "path": "research/experiment_registry.md",
+      "sha256": "d62e9c1c1b07728132c069e1c3e2191466a9a50bf7abdd11110cca0b4b7c64e8"
+    },
+    "prospective_data_collection_plan_md": {
+      "path": "research/prospective_data_collection_plan.md",
+      "sha256": "4f4705fe0a310b4610cfa4b68beeba84ee78e55fdd52ded2ceb80d206b18b529"
+    },
+    "paper_infrastructure": {
+      "paper_config_py": {
+        "path": "paper/config.py",
+        "sha256": "44bb564ebfaa29735f3c3ac3fea249b2ff8be33f684cee4f6821a0daa83ff03a"
+      },
+      "paper_collector_py": {
+        "path": "paper/collector.py",
+        "sha256": "7c63afda527d08bd97890293a008cc4024fd06bd4a735270e290377f00b529fa"
+      },
+      "paper_execution_py": {
+        "path": "paper/execution.py",
+        "sha256": "fa315d6a765b1806e036c50bad2755b1f4dcb372f65d868372e637e513142221"
+      },
+      "paper_strategy_runner_py": {
+        "path": "paper/strategy_runner.py",
+        "sha256": "ed53991e68742f2591596d29da2a09ce813e9c26c83253c48d45632ad7564411"
+      },
+      "paper_run_paper_system_py": {
+        "path": "paper/run_paper_system.py",
+        "sha256": "c515702528dae4f7e1e36efda6e6483b0b50e7049f228108c557da74355af26c"
+      }
+    },
+    "regression_tests": {
+      "test_statistical_audit_py": {
+        "path": "tests/test_statistical_audit.py",
+        "sha256": "17c232067b68a1fa512d4caa3b4a821efaf1e2e44e0d87ef8e2de05c221c3562"
+      },
+      "test_paper_trading_py": {
+        "path": "tests/test_paper_trading.py",
+        "sha256": "48c84c78ff9ba4e1e857719d5951975dded130cf4942c95f314426595f38a5ea"
+      }
+    }
+  }
 }

@@ -209,7 +209,16 @@ def compute_reconciled_trade_metrics(
         }
 
     df_tr = pd.DataFrame(trades)
-    net_rets = df_tr["net_return"].values.astype(np.float64)
+    if "net_return" in df_tr.columns:
+        net_rets = df_tr["net_return"].values.astype(np.float64)
+    elif "net_return_pct" in df_tr.columns:
+        net_rets = (df_tr["net_return_pct"].values.astype(np.float64)) / 100.0
+    elif "trade_return_pct" in df_tr.columns:
+        net_rets = (df_tr["trade_return_pct"].values.astype(np.float64)) / 100.0
+    elif "net_pnl_usd" in df_tr.columns and initial_capital > 0:
+        net_rets = (df_tr["net_pnl_usd"].values.astype(np.float64)) / initial_capital
+    else:
+        net_rets = np.zeros(n_trades, dtype=np.float64)
 
     wins = net_rets[net_rets > 0]
     losses = net_rets[net_rets < 0]
@@ -262,8 +271,8 @@ def compute_reconciled_trade_metrics(
     levered_net_return = ((account_eq - initial_capital) / initial_capital) * 100.0
 
     # Trade counts and splits
-    long_trades = int((df_tr["side"].astype(str).str.upper().isin(["LONG", "1"])).sum())
-    short_trades = int((df_tr["side"].astype(str).str.upper().isin(["SHORT", "-1"])).sum())
+    long_trades = int((df_tr["side"].astype(str).str.upper().isin(["LONG", "1"])).sum()) if "side" in df_tr else 0
+    short_trades = int((df_tr["side"].astype(str).str.upper().isin(["SHORT", "-1"])).sum()) if "side" in df_tr else 0
     avg_hold = float(df_tr["holding_bars"].mean()) if "holding_bars" in df_tr else 0.0
 
     # Consecutive losses
@@ -316,19 +325,22 @@ def compute_reconciled_trade_metrics(
         observed_sharpe=sharpe,
         returns=net_rets,
         track_record_len=n_trades,
-        n_trials=n_trials
+        n_trials=n_trials,
+        annualization_factor=max(1.0, trades_per_year)
     )
 
     # Moving Block Bootstrap (Kunsch 1989) for 95% CI of Expectancy (bps)
+    # Preserves autocorrelation between consecutive trades; uses ceil to cover full sample length
     rng = np.random.default_rng(seed)
-    n_blocks = max(1, n_trades // block_size)
+    eff_block = max(1, min(block_size, n_trades))
+    n_blocks = max(1, math.ceil(n_trades / eff_block))
     boot_exp_bps = []
 
     for _ in range(n_bootstraps):
-        starts = rng.integers(0, max(1, n_trades - block_size + 1), size=n_blocks)
+        starts = rng.integers(0, max(1, n_trades - eff_block + 1), size=n_blocks)
         b_idx = []
         for s in starts:
-            b_idx.extend(range(s, min(n_trades, s + block_size)))
+            b_idx.extend(range(s, min(n_trades, s + eff_block)))
         b_idx = np.array(b_idx[:n_trades])
         boot_exp_bps.append(np.mean(net_rets[b_idx]) * 10000.0)
 
@@ -375,40 +387,83 @@ def compute_reconciled_trade_metrics(
 def compute_deflated_sharpe_ratio(
     observed_sharpe: float,
     returns: np.ndarray,
-    track_record_len: int,
-    n_trials: int = 1
+    track_record_len: Optional[int] = None,
+    n_trials: int = 1,
+    annualization_factor: float = 365.25,
+    trials_variance: Optional[float] = None
 ) -> float:
     """
     Computes Deflated Sharpe Ratio (DSR) based on Bailey and Lopez de Prado (2014):
     'The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting and Non-Normality'
+    
+    Args:
+        observed_sharpe: Annualized Sharpe ratio of the evaluated strategy.
+        returns: Return time-series corresponding to the observation frequency (e.g. daily, hourly, or trade-level).
+        track_record_len: Number of return observations T. If None, len(returns) is used.
+        n_trials: Number of independent strategy configurations/trials tested (K >= 1).
+        annualization_factor: Annualization multiplier q (e.g. 365.25 for daily crypto, 8760 for hourly, or trades/year).
+        trials_variance: Empirical cross-sectional variance of the trial Sharpe ratios. If None, theoretical null variance q/(T-1) is used.
+        
+    Returns:
+        Probability in [0, 1] that the observed Sharpe ratio exceeds the expected maximum Sharpe ratio from pure luck.
     """
-    if track_record_len < 10 or np.std(returns) == 0:
+    T = len(returns) if track_record_len is None else int(track_record_len)
+    if T < 10 or np.std(returns) == 0:
         return 0.0
 
-    # Calculate sample skewness and kurtosis
+    q = max(1.0, float(annualization_factor))
+
+    # Sample skewness (gamma_3) and kurtosis (gamma_4) of returns
     diffs = returns - np.mean(returns)
     std = np.std(returns)
-    skew = np.mean(diffs ** 3) / (std ** 3 + 1e-12)
-    kurt = np.mean(diffs ** 4) / (std ** 4 + 1e-12)
+    if std <= 1e-12:
+        return 0.0
+    skew = float(np.mean(diffs ** 3) / (std ** 3 + 1e-12))
+    kurt = float(np.mean(diffs ** 4) / (std ** 4 + 1e-12))
 
-    # Expected maximum Sharpe ratio under the null hypothesis (SR* = 0) among K independent trials
-    euler_mascheroni = 0.5772156649
+    # Non-annualized sample Sharpe ratio (sr_0)
+    sr_0 = observed_sharpe / math.sqrt(q)
+
+    # Asymptotic standard error of annualized Sharpe ratio under Mertens (2002) non-normal adjustment
+    # sigma_SR_ann = sqrt(q * (1 - gamma_3 * sr_0 + ((gamma_4 - 1) / 4) * sr_0^2) / (T - 1))
+    var_term = (1.0 - skew * sr_0 + ((kurt - 1.0) / 4.0) * (sr_0 ** 2)) / (T - 1.0)
+    if var_term <= 0 or np.isnan(var_term):
+        return 0.0
+    sr_ann_std = math.sqrt(q * var_term)
+    if sr_ann_std <= 1e-12:
+        return 0.0
+
+    # Expected maximum annualized Sharpe ratio under H0 (true SR = 0) among K independent trials
+    # SR* = sqrt(V) * ((1 - gamma) * Z^-1(1 - 1/K) + gamma * Z^-1(1 - 1/(K * e)))
     if n_trials > 1:
-        sr_star = (1.0 - euler_mascheroni) * (2.0 * np.log(n_trials)) ** (-0.5) + (2.0 * np.log(n_trials)) ** 0.5
+        euler_mascheroni = 0.5772156649
+        k_val = float(n_trials)
+        # Variance of Sharpe estimates across trials under H0: V = q / (T - 1) if not provided
+        v_trials = float(trials_variance) if trials_variance is not None and trials_variance > 0 else (q / (T - 1.0))
+        std_trials = math.sqrt(v_trials)
+
+        # Rational approximation of normal quantile function (probit) for robustness
+        def _norm_ppf(p: float) -> float:
+            p = min(max(p, 1e-12), 1.0 - 1e-12)
+            try:
+                import scipy.stats as st
+                return float(st.norm.ppf(p))
+            except ImportError:
+                # Rational approximation (Abramowitz and Stegun 26.2.23)
+                t = math.sqrt(-2.0 * math.log(1.0 - p))
+                c0, c1, c2 = 2.515517, 0.802853, 0.010328
+                d1, d2, d3 = 1.432788, 0.189269, 0.001308
+                return t - ((c2 * t + c1) * t + c0) / (((d3 * t + d2) * t + d1) * t + 1.0)
+
+        z_p1 = _norm_ppf(1.0 - 1.0 / k_val)
+        z_p2 = _norm_ppf(1.0 - 1.0 / (k_val * math.e))
+        expected_max_z = (1.0 - euler_mascheroni) * z_p1 + euler_mascheroni * z_p2
+        sr_star = std_trials * expected_max_z
     else:
         sr_star = 0.0
 
-    # Standard deviation of the Sharpe Ratio estimate
-    var_term = (1.0 - skew * observed_sharpe + ((kurt - 1.0) / 4.0) * (observed_sharpe ** 2)) / (track_record_len - 1.0)
-    if var_term <= 0 or np.isnan(var_term):
-        return 0.0
-    sr_std = math.sqrt(var_term)
-    
-    if sr_std <= 0:
-        return 0.0
-
-    z_stat = (observed_sharpe - sr_star) / sr_std
-    # Standard normal CDF approximation (error function)
+    # Test statistic Z = (observed_sharpe_ann - sr_star) / sr_ann_std
+    z_stat = (observed_sharpe - sr_star) / sr_ann_std
     dsr = 0.5 * (1.0 + math.erf(z_stat / math.sqrt(2.0)))
     return float(np.clip(dsr, 0.0, 1.0))
 
@@ -419,12 +474,13 @@ def compute_continuous_portfolio_metrics(
     n_trials: int = 1,
     block_hours: int = 168,
     n_bootstraps: int = 2000,
-    seed: int = 42
+    seed: int = 42,
+    hourly_lowest_equity: Optional[pd.Series] = None
 ) -> Dict[str, Any]:
     """
     Computes rigorous continuous portfolio equity metrics on hourly mark-to-market data:
     1. Calendar CAGR (based on actual elapsed calendar years).
-    2. Continuous Mark-to-Market Maximum Drawdown (intratrade hourly fidelity).
+    2. Continuous Mark-to-Market Maximum Drawdown (intratrade hourly fidelity, with lowest-tick support).
     3. Continuous Daily & Hourly Sharpe and Sortino ratios.
     4. Calendar Monthly return distribution & 30% monthly target evaluation.
     5. Moving Block Bootstrap on hourly return time series (Kunsch 1989).
@@ -453,9 +509,13 @@ def compute_continuous_portfolio_metrics(
     valid_h = ~np.isnan(h_rets) & ~np.isinf(h_rets)
     h_rets = h_rets[valid_h]
 
-    # Continuous Intratrade Mark-to-Market Drawdown
+    # Continuous Intratrade Mark-to-Market Drawdown (lowest tick aware)
     peaks = np.maximum.accumulate(eq)
-    drawdowns = (peaks - eq) / peaks * 100.0
+    if hourly_lowest_equity is not None and len(hourly_lowest_equity) == len(eq):
+        lowest_vals = hourly_lowest_equity.values.astype(np.float64)
+        drawdowns = (peaks - lowest_vals) / np.where(peaks == 0, 1e-6, peaks) * 100.0
+    else:
+        drawdowns = (peaks - eq) / np.where(peaks == 0, 1e-6, peaks) * 100.0
     max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
 
     # Drawdown duration & recovery time
@@ -477,6 +537,7 @@ def compute_continuous_portfolio_metrics(
     df_eq = pd.DataFrame({"equity": eq}, index=timestamps)
     daily_eq = df_eq["equity"].resample("1D").last().dropna()
     d_vals = daily_eq.values
+    d_rets = np.array([], dtype=np.float64)
     if len(d_vals) > 1:
         d_rets = (d_vals[1:] - d_vals[:-1]) / np.where(d_vals[:-1] == 0, 1e-6, d_vals[:-1])
         d_std = float(np.std(d_rets)) if len(d_rets) > 1 else 1e-6
@@ -558,25 +619,37 @@ def compute_continuous_portfolio_metrics(
     target_30pct_met = (med_monthly >= 30.0) and (avg_monthly >= 30.0) and (pct_profitable_months >= 70.0)
     shortfall_bps = round((30.0 - med_monthly) * 100.0, 1)
 
-    # Deflated Sharpe Ratio
-    dsr = compute_deflated_sharpe_ratio(
+    # Deflated Sharpe Ratio (Bailey & Lopez de Prado 2014)
+    # 1. Daily frequency DSR using daily returns (annualization factor 365.25)
+    daily_dsr = compute_deflated_sharpe_ratio(
         observed_sharpe=daily_sharpe,
+        returns=d_rets if len(d_rets) >= 10 else h_rets,
+        track_record_len=len(d_rets) if len(d_rets) >= 10 else len(h_rets),
+        n_trials=n_trials,
+        annualization_factor=365.25 if len(d_rets) >= 10 else 8760.0
+    )
+    # 2. Hourly frequency DSR
+    hourly_dsr = compute_deflated_sharpe_ratio(
+        observed_sharpe=hourly_sharpe,
         returns=h_rets,
         track_record_len=len(h_rets),
-        n_trials=n_trials
+        n_trials=n_trials,
+        annualization_factor=8760.0
     )
 
     # Chronological Time-Series Moving Block Bootstrap on hourly returns
+    # Preserves autocorrelation between consecutive hourly returns; uses ceil to cover full duration
     rng = np.random.default_rng(seed)
     n_h = len(h_rets)
-    n_blocks = max(1, n_h // block_hours)
-    offsets = np.arange(block_hours)
+    eff_block = max(1, min(block_hours, n_h))
+    n_blocks = max(1, math.ceil(n_h / eff_block))
+    offsets = np.arange(eff_block)
     boot_cagrs = []
     boot_sharpes = []
     boot_dds = []
 
     for _ in range(n_bootstraps):
-        starts = rng.integers(0, max(1, n_h - block_hours + 1), size=n_blocks)
+        starts = rng.integers(0, max(1, n_h - eff_block + 1), size=n_blocks)
         b_idx = (starts[:, None] + offsets[None, :]).ravel()[:n_h]
         b_rets = h_rets[b_idx]
         b_cum = np.cumprod(1.0 + b_rets)
@@ -585,7 +658,7 @@ def compute_continuous_portfolio_metrics(
         b_peaks = np.maximum.accumulate(b_cum)
         b_dd = float(np.max((b_peaks - b_cum) / b_peaks * 100.0)) if len(b_cum) > 0 else 0.0
         b_std = float(np.std(b_rets)) if len(b_rets) > 1 else 1e-6
-        b_sr = (float(np.mean(b_rets)) / b_std) * np.sqrt(8760.0) if b_std > 0 else 0.0
+        b_sr = (float(np.mean(b_rets)) / b_std) * math.sqrt(8760.0) if b_std > 0 else 0.0
 
         boot_cagrs.append(b_cagr)
         boot_sharpes.append(b_sr)
@@ -602,6 +675,10 @@ def compute_continuous_portfolio_metrics(
         n_trials=n_trials,
         calendar_duration_years=cal_years
     )
+
+    # Reconciliation between trade-level PnL sum and portfolio equity change
+    sum_trade_pnl = sum(t.get("trade_pnl_usd", 0.0) for t in trades)
+    pnl_reconciliation_diff = round(abs((final_eq - initial_eq) - sum_trade_pnl), 2)
 
     return {
         "calendar_start": str(t_start),
@@ -621,7 +698,10 @@ def compute_continuous_portfolio_metrics(
         "ci_95_hourly_sharpe": ci_sharpe,
         "daily_sortino": round(daily_sortino, 3),
         "calmar_ratio": round(calmar, 3),
-        "deflated_sharpe_ratio": round(dsr, 4),
+        "deflated_sharpe_ratio": round(daily_dsr, 4),
+        "daily_deflated_sharpe_ratio": round(daily_dsr, 4),
+        "hourly_deflated_sharpe_ratio": round(hourly_dsr, 4),
+        "pnl_reconciliation_difference_usd": pnl_reconciliation_diff,
         "monthly_metrics": {
             "average_monthly_return_pct": round(avg_monthly, 2),
             "median_monthly_return_pct": round(med_monthly, 2),
@@ -644,27 +724,37 @@ def compute_probability_of_backtest_overfitting(
     equity_matrix: pd.DataFrame,
     n_splits: int = 16,
     max_evals: int = 1000,
-    seed: int = 42
+    seed: int = 42,
+    metric: str = "sharpe"
 ) -> float:
     """
     Computes Probability of Backtest Overfitting (PBO) via Combinatorially Symmetric
     Cross-Validation (CSCV) following Bailey, Borwein, Lopez de Prado, Zhu (2016).
     equity_matrix: columns are candidate strategy equity curves, index is chronological timestamps.
+    metric: 'sharpe' (standard risk-adjusted performance) or 'return' (cumulative percentage return).
     """
     if equity_matrix.empty or equity_matrix.shape[1] < 2 or len(equity_matrix) < n_splits * 2:
         return 0.0
 
     T, N = equity_matrix.shape
     slice_len = T // n_splits
-    # Compute slice returns for each strategy
-    slice_returns = np.zeros((n_splits, N))
-    vals = equity_matrix.values
+    vals = equity_matrix.values.astype(np.float64)
+
+    # Pre-extract slice periodic returns for high-speed evaluation
+    slice_rets_list = []
+    slice_cum_returns = np.zeros((n_splits, N))
+
     for s in range(n_splits):
         start_idx = s * slice_len
-        end_idx = (s + 1) * slice_len - 1 if s < n_splits - 1 else T - 1
-        start_val = vals[start_idx]
-        end_val = vals[end_idx]
-        slice_returns[s, :] = (end_val - start_val) / np.where(start_val == 0, 1e-6, start_val)
+        end_idx = (s + 1) * slice_len if s < n_splits - 1 else T
+        sub_vals = vals[start_idx:end_idx]
+        denom = np.where(sub_vals[:-1] == 0, 1e-6, sub_vals[:-1])
+        s_rets = (sub_vals[1:] - denom) / denom
+        slice_rets_list.append(s_rets)
+
+        start_val = sub_vals[0]
+        end_val = sub_vals[-1]
+        slice_cum_returns[s, :] = (end_val - start_val) / np.where(start_val == 0, 1e-6, start_val)
 
     # Half splits: choose n_splits // 2
     half_s = n_splits // 2
@@ -683,18 +773,25 @@ def compute_probability_of_backtest_overfitting(
         is_set = set(is_idx)
         oos_idx = [i for i in range(n_splits) if i not in is_set]
 
-        # In-sample aggregate performance
-        is_perf = np.mean(slice_returns[list(is_idx), :], axis=0)
-        best_is_strategy = int(np.argmax(is_perf))
+        if metric == "sharpe":
+            is_concat = np.concatenate([slice_rets_list[s] for s in is_idx], axis=0)
+            is_std = np.std(is_concat, axis=0)
+            is_perf = np.mean(is_concat, axis=0) / np.where(is_std == 0, 1e-6, is_std)
 
-        # Out-of-sample aggregate performance
-        oos_perf = np.mean(slice_returns[oos_idx, :], axis=0)
-        oos_ranks = np.argsort(np.argsort(-oos_perf)) # 0 is best
+            oos_concat = np.concatenate([slice_rets_list[s] for s in oos_idx], axis=0)
+            oos_std = np.std(oos_concat, axis=0)
+            oos_perf = np.mean(oos_concat, axis=0) / np.where(oos_std == 0, 1e-6, oos_std)
+        else:
+            is_perf = np.mean(slice_cum_returns[list(is_idx), :], axis=0)
+            oos_perf = np.mean(slice_cum_returns[oos_idx, :], axis=0)
+
+        best_is_strategy = int(np.argmax(is_perf))
+        oos_ranks = np.argsort(np.argsort(-oos_perf))  # 0 is best
         rank_best = oos_ranks[best_is_strategy]
 
-        # Overfitting occurred if in-sample winner ranks below median out-of-sample
+        # Overfitting occurred if in-sample winner ranks at or below median out-of-sample
         median_rank = N / 2.0
-        if rank_best > median_rank:
+        if rank_best >= median_rank:
             rank_losses += 1
         total_evals += 1
 
