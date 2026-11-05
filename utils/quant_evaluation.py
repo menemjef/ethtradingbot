@@ -399,7 +399,10 @@ def compute_deflated_sharpe_ratio(
         sr_star = 0.0
 
     # Standard deviation of the Sharpe Ratio estimate
-    sr_std = np.sqrt((1.0 - skew * observed_sharpe + ((kurt - 1.0) / 4.0) * (observed_sharpe ** 2)) / (track_record_len - 1.0))
+    var_term = (1.0 - skew * observed_sharpe + ((kurt - 1.0) / 4.0) * (observed_sharpe ** 2)) / (track_record_len - 1.0)
+    if var_term <= 0 or np.isnan(var_term):
+        return 0.0
+    sr_std = math.sqrt(var_term)
     
     if sr_std <= 0:
         return 0.0
@@ -494,14 +497,29 @@ def compute_continuous_portfolio_metrics(
     m_vals = monthly_eq.values
     m_dates = [ts.strftime("%Y-%m") for ts in monthly_eq.index]
     
+    # Check if final month is incomplete (Month-to-Date)
+    is_last_mtd = (t_end.day < 28) or (t_end.month != (t_end + pd.Timedelta(days=1)).month)
+    mtd_key = None
+    mtd_val = 0.0
+
     if len(m_vals) > 0:
         prev_m = initial_eq
-        for m_date, m_val in zip(m_dates, m_vals):
+        for idx, (m_date, m_val) in enumerate(zip(m_dates, m_vals)):
             m_ret = ((m_val - prev_m) / prev_m) * 100.0 if prev_m > 0 else 0.0
-            monthly_rets_dict[m_date] = round(float(m_ret), 2)
+            if idx == len(m_vals) - 1 and is_last_mtd:
+                key_name = f"{m_date} (MTD)"
+                mtd_key = key_name
+                mtd_val = round(float(m_ret), 2)
+                monthly_rets_dict[key_name] = mtd_val
+            else:
+                monthly_rets_dict[m_date] = round(float(m_ret), 2)
             prev_m = m_val
 
-    m_list = list(monthly_rets_dict.values())
+    # For statistics, use completed months (exclude partial MTD)
+    completed_m_list = [v for k, v in monthly_rets_dict.items() if "(MTD)" not in k]
+    if len(completed_m_list) == 0:
+        completed_m_list = list(monthly_rets_dict.values())
+    m_list = completed_m_list
     if len(m_list) > 0:
         avg_monthly = float(np.mean(m_list))
         med_monthly = float(np.median(m_list))
@@ -624,7 +642,9 @@ def compute_continuous_portfolio_metrics(
 
 def compute_probability_of_backtest_overfitting(
     equity_matrix: pd.DataFrame,
-    n_splits: int = 16
+    n_splits: int = 16,
+    max_evals: int = 1000,
+    seed: int = 42
 ) -> float:
     """
     Computes Probability of Backtest Overfitting (PBO) via Combinatorially Symmetric
@@ -649,8 +669,12 @@ def compute_probability_of_backtest_overfitting(
     # Half splits: choose n_splits // 2
     half_s = n_splits // 2
     all_combos = list(itertools.combinations(range(n_splits), half_s))
-    max_combos = min(200, len(all_combos))
-    combos_to_eval = all_combos[:max_combos]
+    if len(all_combos) <= max_evals:
+        combos_to_eval = all_combos
+    else:
+        rng = np.random.default_rng(seed)
+        chosen_indices = rng.choice(len(all_combos), size=max_evals, replace=False)
+        combos_to_eval = [all_combos[i] for i in chosen_indices]
 
     rank_losses = 0
     total_evals = 0

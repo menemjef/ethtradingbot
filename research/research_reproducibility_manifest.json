@@ -1,28 +1,88 @@
 {
-  "repository": "menemjef/ethtradingbot",
-  "working_branch": "fix/execution-safety-and-backtest-integrity",
-  "phase": "Quant Phase 2: Swing Trading and Regime-Aware Strategies",
-  "python_version": "3.10.6",
-  "random_seeds": {
-    "torch": 42,
-    "numpy": 42,
-    "python": 42
+  "manifest_version": "2.1.0",
+  "phase": "Quant Phase 2.1 Backtest Integrity Repair & Candidate Revalidation",
+  "timestamp_utc": "2026-11-05T04:18:51.515282+00:00",
+  "git_branch": "fix/execution-safety-and-backtest-integrity",
+  "execution_safety_flags": {
+    "TRADING_ENABLED": false,
+    "MOCK_TRADING": true,
+    "PRODUCTION_READY": false,
+    "USE_BINANCE_TESTNET": true
   },
   "datasets": {
     "eth_usdt_1h_3yr": {
       "path": "data/cache/eth_usdt_1h_3yr.parquet",
       "sha256": "ffdbd16de69264f197ec83246501d0b2cbfcc244c8373eb11102ad629afaa1d7",
-      "bars": 32720
+      "rows": 32720,
+      "range_start": "2023-02-10 11:00:00+00:00",
+      "range_end": "2026-11-04 18:00:00+00:00"
     },
     "eth_funding_3yr": {
       "path": "data/cache/eth_funding_3yr.parquet",
       "sha256": "d741ec495653e23507c45bf9ca827e58e0377738879d42a269e5c6730937cc91",
-      "records": 4090
+      "raw_records": 4090,
+      "normalized_matched_settlements": 4090,
+      "missed_settlements": 0,
+      "mean_rate_bps": 0.653
     }
   },
-  "pbo_combinatorial_splits": 16,
-  "pbo_score": 0.36,
-  "evaluated_trials_K": 32,
-  "reproduction_command": "python research/scripts/run_swing_research.py",
-  "generated_at": "2026-11-04T20:24:41.032482+00:00"
+  "walk_forward_folds": [
+    {
+      "fold_id": 1,
+      "type": "walk_forward_test",
+      "purge_start": "2023-09-01 00:00:00+00:00",
+      "purge_end": "2023-09-07 23:00:00+00:00",
+      "eval_start": "2023-09-08 00:00:00+00:00",
+      "eval_end": "2024-04-30 23:00:00+00:00",
+      "eval_hours": 5664
+    },
+    {
+      "fold_id": 2,
+      "type": "walk_forward_test",
+      "purge_start": "2024-05-01 00:00:00+00:00",
+      "purge_end": "2024-05-07 23:00:00+00:00",
+      "eval_start": "2024-05-08 00:00:00+00:00",
+      "eval_end": "2024-12-31 23:00:00+00:00",
+      "eval_hours": 5712
+    },
+    {
+      "fold_id": 3,
+      "type": "walk_forward_test",
+      "purge_start": "2025-01-01 00:00:00+00:00",
+      "purge_end": "2025-01-07 23:00:00+00:00",
+      "eval_start": "2025-01-08 00:00:00+00:00",
+      "eval_end": "2025-08-31 23:00:00+00:00",
+      "eval_hours": 5664
+    },
+    {
+      "fold_id": 4,
+      "type": "walk_forward_test",
+      "purge_start": "2025-09-01 00:00:00+00:00",
+      "purge_end": "2025-09-07 23:00:00+00:00",
+      "eval_start": "2025-09-08 00:00:00+00:00",
+      "eval_end": "2026-03-31 23:00:00+00:00",
+      "eval_hours": 4920
+    },
+    {
+      "fold_id": 5,
+      "type": "untouched_holdout",
+      "purge_start": "2026-04-01 00:00:00+00:00",
+      "purge_end": "2026-04-07 23:00:00+00:00",
+      "eval_start": "2026-04-08 00:00:00+00:00",
+      "eval_end": "2026-11-04 18:00:00+00:00",
+      "eval_hours": 5059
+    }
+  ],
+  "cscv_pbo": 0.526,
+  "deflated_sharpe_k_trials": 32,
+  "deliverables": [
+    "research/phase_2_1_audit_findings.md",
+    "research/phase_2_1_fold_metrics.json",
+    "research/phase_2_1_fold_trade_log.csv",
+    "research/phase_2_1_equity_curves.csv",
+    "research/phase_2_1_holding_monthly_equity_curves.csv",
+    "research/phase_2_1_candidate_comparison.md",
+    "tests/test_phase_2_1_corrections.py",
+    "research/scripts/run_phase_2_1_research.py"
+  ]
 }
