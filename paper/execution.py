@@ -288,32 +288,77 @@ class PaperExecutionEngine:
             elif "strategy_id" not in trade_cols:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
 
-            # 7. Versioned one-time migration: Phase 2.2D available-cash portfolio conversion
+            # 7. Versioned one-time migration: Phase 2.2E available-cash portfolio conversion
             conn.execute("""
             CREATE TABLE IF NOT EXISTS paper_schema_migrations (
                 migration_id TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
             """)
-            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2d_available_cash_migration'")
+            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id IN ('phase_2_2d_available_cash_migration', 'phase_2_2e_portfolio_migration')")
             if cur.fetchone()[0] == 0:
                 # Inspect active open positions in paper_positions
                 cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
                 open_margin = float(cur.fetchone()[0])
 
                 # Check current paper_portfolio
-                cur.execute("SELECT id, cash_balance, equity FROM paper_portfolio ORDER BY id DESC LIMIT 1")
+                cur.execute("SELECT id, cash_balance, equity, unrealized_pnl, margin_used, peak_equity, realized_pnl FROM paper_portfolio ORDER BY id DESC LIMIT 1")
                 port_row = cur.fetchone()
                 if port_row and open_margin > 0:
-                    p_id, p_cash, p_equity = port_row[0], float(port_row[1]), float(port_row[2])
-                    # If legacy Phase 2.2B balance: cash_balance did not have margin deducted
-                    if abs(p_cash - p_equity) < 1.0 or (p_cash + open_margin > p_equity):
+                    p_id = port_row[0]
+                    p_cash = float(port_row[1])
+                    p_equity = float(port_row[2])
+                    p_unrealized = float(port_row[3])
+                    p_margin = float(port_row[4])
+                    p_peak = float(port_row[5])
+                    p_realized = float(port_row[6])
+
+                    # Detection of legacy Phase 2.2B state:
+                    # In Phase 2.2B, equity was computed as:
+                    #   equity = cash_balance + margin_used + unrealized_pnl
+                    # where cash_balance was NOT decremented by margin_req on entry.
+                    # As a result, both cash_balance and equity were inflated by margin_used:
+                    #   legacy_cash = available_cash + open_margin
+                    #   legacy_equity = true_equity + open_margin
+                    #
+                    # Signature check for Phase 2.2B unmigrated state:
+                    is_legacy_22b = (
+                        abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1
+                        or abs(p_equity - (p_cash + p_margin + p_unrealized)) < 0.1
+                        or (p_cash + open_margin > initial_capital + p_realized - 1.0)
+                        or abs(p_cash - p_equity) < 1.0
+                    )
+                    if is_legacy_22b:
                         new_cash = max(0.0, p_cash - open_margin)
-                        conn.execute("UPDATE paper_portfolio SET cash_balance = ?, margin_used = ? WHERE id = ?", (new_cash, open_margin, p_id))
-                        logger.info(f"Phase 2.2D Migration: converted legacy portfolio cash ${p_cash:.2f} -> available cash ${new_cash:.2f} (margin: ${open_margin:.2f})")
+                        # Check whether legacy equity was also inflated by open_margin
+                        if abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1 or abs(p_equity - (p_cash + p_margin + p_unrealized)) < 0.1:
+                            new_equity = p_equity - open_margin
+                            new_peak = max(new_equity, p_peak - open_margin)
+                        else:
+                            new_equity = new_cash + open_margin + p_unrealized
+                            new_peak = max(new_equity, p_peak)
+
+                        new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
+
+                        conn.execute("""
+                        UPDATE paper_portfolio
+                        SET cash_balance = ?, equity = ?, margin_used = ?, peak_equity = ?, drawdown_pct = ?
+                        WHERE id = ?
+                        """, (
+                            round(new_cash, 2),
+                            round(new_equity, 2),
+                            round(open_margin, 2),
+                            round(new_peak, 2),
+                            round(new_drawdown, 2),
+                            p_id
+                        ))
+                        logger.info(
+                            f"Phase 2.2E Migration: converted legacy portfolio (cash ${p_cash:.2f} -> ${new_cash:.2f}, "
+                            f"equity ${p_equity:.2f} -> ${new_equity:.2f}, margin: ${open_margin:.2f})"
+                        )
 
                 now_mig_str = datetime.now(timezone.utc).isoformat()
-                conn.execute("INSERT INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2d_available_cash_migration', ?)", (now_mig_str,))
+                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2e_portfolio_migration', ?)", (now_mig_str,))
 
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")
@@ -755,13 +800,15 @@ class PaperExecutionEngine:
         bar_high: float,
         bar_low: float,
         bar_close: float,
-        bar_close_time: Optional[int] = None
+        bar_close_time: Optional[int] = None,
+        bar_open_time: Optional[int] = None
     ) -> Optional[Tuple[str, Optional[float]]]:
         """
         Evaluates intra-candle stop-loss and take-profit breaches with:
-        1. Adverse opening gap detection.
-        2. Strict stop-first resolution on ambiguous same-bar collisions.
-        3. Causality verification (rejects candles completed before position entry).
+        1. Entry causality verification (rejects candles whose open time precedes position entry).
+        2. Conservative trade-through requirement for take-profit using exchange tick size.
+        3. Adverse opening gap detection.
+        4. Strict stop-first resolution on ambiguous same-bar collisions.
         Returns: (exit_reason, adverse_gap_price_or_none) or None.
         """
         key = (strategy_id, symbol)
@@ -769,29 +816,49 @@ class PaperExecutionEngine:
         if not pos:
             return None
 
-        # Causality guard: Never use a candle completed before position entry to trigger stops/targets
-        if bar_close_time is not None:
-            try:
-                pos_entry_dt = datetime.fromisoformat(pos["entry_time"])
-                pos_entry_ms = int(pos_entry_dt.timestamp() * 1000)
-                if bar_close_time <= pos_entry_ms:
-                    logger.debug(f"Ignoring candle with close_time {bar_close_time} <= entry_time {pos_entry_ms}")
+        # Entry Causality Guard:
+        # A candle that opens before position entry (even if it closes after entry)
+        # must NEVER trigger that position's stops or targets.
+        try:
+            pos_entry_dt = datetime.fromisoformat(pos["entry_time"])
+            pos_entry_ms = int(pos_entry_dt.timestamp() * 1000)
+
+            if bar_open_time is not None:
+                if bar_open_time < pos_entry_ms:
+                    logger.debug(
+                        f"Entry causality violation: candle open_time {bar_open_time} < position entry_time {pos_entry_ms}."
+                    )
                     return None
-            except Exception:
-                pass
+            elif bar_close_time is not None:
+                # Infer 1m candle open time if only close time is provided
+                inferred_open = bar_close_time - 59999
+                if inferred_open < pos_entry_ms or bar_close_time <= pos_entry_ms:
+                    logger.debug(
+                        f"Entry causality violation: inferred candle open_time {inferred_open} < position entry_time {pos_entry_ms}."
+                    )
+                    return None
+        except Exception as e:
+            logger.debug(f"Could not parse entry time for causality check: {e}")
 
         side = pos["side"]
         sl = pos["stop_loss"]
         tp = pos["take_profit"]
+
+        # Exchange tick size for conservative trade-through requirement
+        tick_size = float(self.contract_specs.get(symbol, {}).get("tick_size", 0.01))
 
         if side == "LONG":
             # 1. Check for adverse opening gap down (bar opened below stop loss)
             if bar_open < sl:
                 return ("stop_loss_gap", bar_open)
 
-            # 2. Check for same-bar ambiguous collision
+            # 2. Stop loss touch (touching or breaching stop triggers stop market order)
             sl_hit = bar_low <= sl
-            tp_hit = bar_high >= tp
+
+            # 3. Take profit trade-through: touching the target price is NOT a guaranteed fill.
+            # Market must trade through by at least 1 tick (high >= tp + tick_size).
+            tp_hit = bar_high >= (tp + tick_size - 1e-9)
+
             if sl_hit and tp_hit:
                 # Stop-first rule: Assume stop loss hit first
                 return ("stop_loss_collision", None)
@@ -805,9 +872,13 @@ class PaperExecutionEngine:
             if bar_open > sl:
                 return ("stop_loss_gap", bar_open)
 
-            # 2. Check for same-bar ambiguous collision
+            # 2. Stop loss touch
             sl_hit = bar_high >= sl
-            tp_hit = bar_low <= tp
+
+            # 3. Take profit trade-through: touching the target price is NOT a guaranteed fill.
+            # Market must trade through by at least 1 tick (low <= tp - tick_size).
+            tp_hit = bar_low <= (tp - tick_size + 1e-9)
+
             if sl_hit and tp_hit:
                 # Stop-first rule: Assume stop loss hit first
                 return ("stop_loss_collision", None)

@@ -401,12 +401,12 @@ class MarketDataCollector:
         if cached_px > 0 and (receipt_ts - cached_ts) <= (MAX_EVENT_STALE_SECONDS * 1000):
             mp = cached_px
         else:
-            # 2. Check mark_prices table in SQLite for recent fresh mark price
+            # 2. Check funding_and_mark_price table in SQLite for recent fresh mark price
             try:
                 with self._get_connection() as conn:
                     cur = conn.cursor()
                     cur.execute(
-                        "SELECT mark_price, receipt_ts FROM mark_prices WHERE symbol = ? ORDER BY receipt_ts DESC LIMIT 1",
+                        "SELECT mark_price, receipt_ts FROM funding_and_mark_price WHERE symbol = ? ORDER BY receipt_ts DESC LIMIT 1",
                         (symbol,)
                     )
                     row = cur.fetchone()
@@ -415,7 +415,7 @@ class MarketDataCollector:
                         if (receipt_ts - db_ts) <= (MAX_EVENT_STALE_SECONDS * 1000):
                             mp = db_px
             except Exception as e:
-                logger.debug(f"Could not read mark price from DB for {symbol}: {e}")
+                logger.debug(f"Could not read mark price from funding_and_mark_price for {symbol}: {e}")
 
         # Preserve base open interest; calculate USD only if fresh mark price is valid
         if mp is not None and mp > 0:

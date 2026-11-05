@@ -76,6 +76,7 @@ class CandidateAPaperRunner:
         self.last_processed_1m_open_time: Dict[str, int] = {}
 
         self._init_runner_tables()
+        self._load_processed_1m_open_times()
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.paper_db_path, timeout=30.0)
@@ -83,8 +84,25 @@ class CandidateAPaperRunner:
         conn.execute("PRAGMA synchronous = NORMAL;")
         return conn
 
+    def _load_processed_1m_open_times(self):
+        """Loads latest processed 1m candle open_time from SQLite for persistent deduplication."""
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                SELECT symbol, MAX(open_time)
+                FROM processed_1m_candles
+                WHERE strategy_id = ?
+                GROUP BY symbol
+                """, (self.strategy_id,))
+                for s, max_ot in cur.fetchall():
+                    if max_ot is not None:
+                        self.last_processed_1m_open_time[s] = int(max_ot)
+        except Exception as e:
+            logger.debug(f"Could not load processed_1m_candles: {e}")
+
     def _init_runner_tables(self):
-        """Initializes tables for strategy evaluations and continuous benchmark tracking."""
+        """Initializes tables for strategy evaluations, persistent candle tracking, and continuous benchmark tracking."""
         with self._get_connection() as conn:
             # 1. Strategy Evaluations table with composite primary key for uniqueness
             conn.execute("""
@@ -114,6 +132,18 @@ class CandidateAPaperRunner:
                 eth_buy_and_hold_equity REAL NOT NULL,
                 cash_equity REAL NOT NULL,
                 eth_price REAL NOT NULL
+            );
+            """)
+
+            # 3. Persistent Completed 1m Candles Tracking
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_1m_candles (
+                strategy_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                open_time INTEGER NOT NULL,
+                close_time INTEGER NOT NULL,
+                processed_at TEXT NOT NULL,
+                PRIMARY KEY (strategy_id, symbol, open_time)
             );
             """)
             conn.commit()
@@ -447,13 +477,11 @@ class CandidateAPaperRunner:
         # Update continuous portfolio MTM
         self.exec_engine.update_mark_to_market(quotes)
 
-        key = (self.strategy_id, self.symbol)
-        pos = self.exec_engine.active_positions.get(key)
-        if not pos:
-            return
-
         quote = quotes.get(self.symbol)
         now_str = datetime.now(timezone.utc).isoformat()
+
+        key = (self.strategy_id, self.symbol)
+        pos = self.exec_engine.active_positions.get(key)
 
         # Check stops and gaps against current 1m bar
         if current_bar:
@@ -463,29 +491,53 @@ class CandidateAPaperRunner:
                 logger.debug(f"Ignoring bar for {bar_sym}: runner is configured for {self.symbol}.")
                 return
 
-            # Deduplication: process each completed 1m candle only once
+            # Persistent Deduplication: process each completed 1m candle only once
             bar_ot = current_bar.get("open_time")
             if bar_ot is not None:
-                if bar_ot <= self.last_processed_1m_open_time.get(self.symbol, -1):
+                last_ot = self.last_processed_1m_open_time.get(self.symbol, -1)
+                if bar_ot <= last_ot:
                     # Already processed this exact 1m completed candle
                     return
-                self.last_processed_1m_open_time[self.symbol] = bar_ot
 
             b_open = float(current_bar.get("open", 0.0))
             b_high = float(current_bar.get("high", 0.0))
             b_low = float(current_bar.get("low", 0.0))
             b_close = float(current_bar.get("close", 0.0))
             b_close_time = current_bar.get("close_time")
+            b_open_time = current_bar.get("open_time")
 
-            trigger = self.exec_engine.check_position_stops_and_gaps(
-                strategy_id=self.strategy_id,
-                symbol=self.symbol,
-                bar_open=b_open,
-                bar_high=b_high,
-                bar_low=b_low,
-                bar_close=b_close,
-                bar_close_time=b_close_time
-            )
+            trigger = None
+            if pos:
+                trigger = self.exec_engine.check_position_stops_and_gaps(
+                    strategy_id=self.strategy_id,
+                    symbol=self.symbol,
+                    bar_open=b_open,
+                    bar_high=b_high,
+                    bar_low=b_low,
+                    bar_close=b_close,
+                    bar_close_time=b_close_time,
+                    bar_open_time=b_open_time
+                )
+
+            # Persist processed candle to SQLite to guarantee persistence across restarts
+            if bar_ot is not None and b_close_time is not None:
+                try:
+                    with self._get_connection() as conn:
+                        conn.execute("""
+                        INSERT OR IGNORE INTO processed_1m_candles (
+                            strategy_id, symbol, open_time, close_time, processed_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """, (
+                            self.strategy_id,
+                            self.symbol,
+                            int(bar_ot),
+                            int(b_close_time),
+                            now_str
+                        ))
+                    self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
+                except Exception as e:
+                    logger.debug(f"Could not persist processed 1m candle: {e}")
+
             if trigger:
                 reason, gap_px = trigger
                 try:
@@ -501,25 +553,102 @@ class CandidateAPaperRunner:
                 except StaleQuoteError as e:
                     logger.warning(f"Could not execute position exit due to stale quote: {e}")
 
-        # Check 72-Hour Maximum Holding Horizon Expiry
-        try:
-            t_ent = datetime.fromisoformat(pos["entry_time"])
-            t_now = datetime.now(timezone.utc)
-            hours_held = (t_now - t_ent).total_seconds() / 3600.0
-            if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
-                if quote:
-                    try:
-                        self.exec_engine.close_position(
-                            strategy_id=self.strategy_id,
-                            symbol=self.symbol,
-                            exit_reason="horizon_expiry",
-                            quote=quote,
-                            exit_time_str=now_str
+        # Check 72-Hour Maximum Holding Horizon Expiry (if position is open)
+        if pos:
+            try:
+                t_ent = datetime.fromisoformat(pos["entry_time"])
+                t_now = datetime.now(timezone.utc)
+                hours_held = (t_now - t_ent).total_seconds() / 3600.0
+                if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                    if quote:
+                        try:
+                            self.exec_engine.close_position(
+                                strategy_id=self.strategy_id,
+                                symbol=self.symbol,
+                                exit_reason="horizon_expiry",
+                                quote=quote,
+                                exit_time_str=now_str
+                            )
+                        except StaleQuoteError as e:
+                            logger.warning(f"Could not close horizon expired position due to stale quote: {e}")
+            except Exception as e:
+                logger.error(f"Error checking horizon expiry: {e}")
+
+    def replay_missed_completed_1m_bars(self, quotes: Dict[str, Dict[str, Any]]) -> int:
+        """
+        Replays missed completed 1m bars from completed_klines in chronological order (ASC).
+        Ensures open positions receive every eligible missed bar after restart.
+        Guarantees duplicate processing does not occur via persistent processed_1m_candles.
+        Returns count of newly processed 1m bars.
+        """
+        if not os.path.exists(self.market_db_path):
+            return 0
+
+        last_ot = self.last_processed_1m_open_time.get(self.symbol)
+        if last_ot is None:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT MAX(open_time) FROM processed_1m_candles WHERE strategy_id = ? AND symbol = ?",
+                    (self.strategy_id, self.symbol)
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    last_ot = int(row[0])
+                    self.last_processed_1m_open_time[self.symbol] = last_ot
+
+        pos = self.exec_engine.active_positions.get((self.strategy_id, self.symbol))
+        if last_ot is None:
+            if pos:
+                try:
+                    entry_dt = datetime.fromisoformat(pos["entry_time"])
+                    last_ot = int(entry_dt.timestamp() * 1000) - 60000
+                except Exception:
+                    last_ot = 0
+            else:
+                try:
+                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                        cur = m_conn.cursor()
+                        cur.execute(
+                            "SELECT MAX(open_time) FROM completed_klines WHERE symbol = ? AND timeframe = '1m'",
+                            (self.symbol,)
                         )
-                    except StaleQuoteError as e:
-                        logger.warning(f"Could not close horizon expired position due to stale quote: {e}")
+                        max_row = cur.fetchone()
+                        last_ot = (int(max_row[0]) - 60000) if (max_row and max_row[0] is not None) else 0
+                except Exception:
+                    last_ot = 0
+            self.last_processed_1m_open_time[self.symbol] = last_ot
+
+        bars_to_process = []
+        try:
+            with sqlite3.connect(self.market_db_path, timeout=10.0) as m_conn:
+                cur = m_conn.cursor()
+                cur.execute("""
+                SELECT open_time, close_time, open, high, low, close
+                FROM completed_klines
+                WHERE symbol = ? AND timeframe = '1m' AND open_time > ?
+                ORDER BY open_time ASC
+                """, (self.symbol, last_ot))
+                for r in cur.fetchall():
+                    bars_to_process.append({
+                        "symbol": self.symbol,
+                        "open_time": int(r[0]),
+                        "close_time": int(r[1]),
+                        "open": float(r[2]),
+                        "high": float(r[3]),
+                        "low": float(r[4]),
+                        "close": float(r[5])
+                    })
         except Exception as e:
-            logger.error(f"Error checking horizon expiry: {e}")
+            logger.error(f"Error querying missed 1m bars from market_data.db: {e}")
+            return 0
+
+        processed_count = 0
+        for bar in bars_to_process:
+            self.process_incoming_market_tick(quotes, current_bar=bar)
+            processed_count += 1
+
+        return processed_count
 
     def evaluate_new_completed_candles(
         self,

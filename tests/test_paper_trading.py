@@ -1026,10 +1026,10 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         self.assertGreaterEqual(cnt, 10)
 
     # -------------------------------------------------------------------------
-    # Test 24: Versioned Migration — Phase 2.2B Available Cash with Open Position
+    # Test 24: Versioned Migration — Phase 2.2B Available Cash with Open Position & Unrealized PnL
     # -------------------------------------------------------------------------
     def test_24_versioned_available_cash_migration_with_open_position(self):
-        """Test 24: Verify versioned one-time migration converts Phase 2.2B portfolio balances with an open position."""
+        """Test 24: Verify versioned one-time migration converts exact Phase 2.2B portfolio balances with open position and unrealized PnL."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             legacy_db = os.path.join(tmp_dir, "legacy_paper_22b.db")
             conn = sqlite3.connect(legacy_db)
@@ -1109,16 +1109,22 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
             );
             """)
 
-            # Insert Phase 2.2B un-migrated state:
-            # cash_balance = $9,998.50 (only fee deducted, margin NOT deducted from cash!)
-            # equity = $9,998.50
-            # open position with margin = $1,000.00
+            # Insert exact Phase 2.2B state:
+            # Initial capital: $10,000.00
+            # Open position: 1.0 ETH at $3,000.00 (margin: $1,000.00, entry fee: $1.50)
+            # Unrealized PnL: +$50.00 (marked at $3,050.00)
+            # In Phase 2.2B:
+            #   cash_balance = 10000.0 - 1.50 = 9998.50 (margin was NOT deducted)
+            #   margin_used = 1000.00
+            #   unrealized_pnl = 50.00
+            #   equity = cash_balance + margin_used + unrealized_pnl = 9998.50 + 1000.00 + 50.00 = 11048.50 (inflated!)
+            #   peak_equity = 11048.50
             now_iso = datetime.now(timezone.utc).isoformat()
             conn.execute("""
             INSERT INTO paper_portfolio (
                 id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
                 margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
-            ) VALUES (1, ?, 9998.50, 9998.50, 0.0, 0.0, 1000.0, 9998.50, 0.0, 0.3, 0.3);
+            ) VALUES (1, ?, 9998.50, 11048.50, 0.0, 50.00, 1000.0, 11048.50, 0.0, 0.28, 0.28);
             """, (now_iso,))
 
             conn.execute("""
@@ -1134,9 +1140,21 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
             engine = PaperExecutionEngine(db_path=legacy_db, market_db_path=self.market_db, initial_capital=10000.0)
 
             # Available cash MUST now be converted: $9,998.50 - $1,000.00 = $8,998.50
+            # Margin used: $1,000.00
+            # Unrealized PnL: $50.00
+            # Equity: $8,998.50 + $1,000.00 + $50.00 = $10,048.50
             self.assertAlmostEqual(engine.portfolio["cash_balance"], 8998.50, places=2)
             self.assertAlmostEqual(engine.portfolio["margin_used"], 1000.0, places=2)
-            self.assertAlmostEqual(engine.portfolio["equity"], 9998.50, places=2)
+            self.assertAlmostEqual(engine.portfolio["unrealized_pnl"], 50.00, places=2)
+            self.assertAlmostEqual(engine.portfolio["equity"], 10048.50, places=2)
+            self.assertAlmostEqual(engine.portfolio["peak_equity"], 10048.50, places=2)
+
+            # Verify reconciliation: cash_balance + margin_used + unrealized_pnl == equity
+            self.assertAlmostEqual(
+                engine.portfolio["equity"],
+                engine.portfolio["cash_balance"] + engine.portfolio["margin_used"] + engine.portfolio["unrealized_pnl"],
+                places=2
+            )
 
             # Verify paper_schema_migrations has recorded the migration
             conn = sqlite3.connect(legacy_db)
@@ -1144,13 +1162,19 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
             cur.execute("SELECT migration_id FROM paper_schema_migrations")
             mig_ids = [r[0] for r in cur.fetchall()]
             conn.close()
-            self.assertIn("phase_2_2d_available_cash_migration", mig_ids)
+            self.assertTrue(any("portfolio_migration" in m or "available_cash" in m for m in mig_ids))
 
-            # Re-initialize engine to verify migration is idempotent and not re-run
+            # Re-initialize engine to verify migration is idempotent and values remain consistent on repeated initialization
             engine2 = PaperExecutionEngine(db_path=legacy_db, market_db_path=self.market_db, initial_capital=10000.0)
             self.assertAlmostEqual(engine2.portfolio["cash_balance"], 8998.50, places=2)
             self.assertAlmostEqual(engine2.portfolio["margin_used"], 1000.0, places=2)
-            self.assertAlmostEqual(engine2.portfolio["equity"], 9998.50, places=2)
+            self.assertAlmostEqual(engine2.portfolio["unrealized_pnl"], 50.00, places=2)
+            self.assertAlmostEqual(engine2.portfolio["equity"], 10048.50, places=2)
+            self.assertAlmostEqual(
+                engine2.portfolio["equity"],
+                engine2.portfolio["cash_balance"] + engine2.portfolio["margin_used"] + engine2.portfolio["unrealized_pnl"],
+                places=2
+            )
 
     # -------------------------------------------------------------------------
     # Test 25: Funding Accruals — Long & Short Atomic Persistence and Restart Recovery
@@ -1524,6 +1548,237 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
             self.assertEqual(fmt_none, "N/A")
             self.assertEqual(fmt_zero, "N/A")
             self.assertEqual(fmt_val, "$150,000,000.00")
+
+    # -------------------------------------------------------------------------
+    # Test 30: Open Interest Fresh DB Mark Price Query After Restart
+    # -------------------------------------------------------------------------
+    def test_30_open_interest_fresh_db_mark_price_after_restart(self):
+        """Test 30: Verify fetch_open_interest queries funding_and_mark_price when in-memory cache is empty after restart."""
+        m_db = os.path.join(self.test_dir, "market_restart_oi.db")
+        collector = MarketDataCollector(db_path=m_db)
+
+        # Insert a fresh mark price observation into funding_and_mark_price
+        now_ms = int(time.time() * 1000)
+        with collector._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO funding_and_mark_price (
+                symbol, timestamp, mark_price, index_price, funding_rate,
+                next_funding_time, exchange_ts, receipt_ts
+            ) VALUES ('ETHUSDT', ?, 3120.50, 3120.00, 0.0001, ?, ?, ?);
+            """, (now_ms - 2000, now_ms + 14400000, now_ms - 2000, now_ms - 2000))
+
+        # Simulate fresh restart: create a new collector instance with empty memory cache
+        collector_restarted = MarketDataCollector(db_path=m_db)
+        self.assertEqual(len(collector_restarted.latest_mark_prices), 0)
+
+        # Mock REST API response for base open interest
+        collector_restarted._http_get_json = lambda url: {
+            "symbol": "ETHUSDT",
+            "openInterest": "50000.0",
+            "time": now_ms
+        }
+
+        oi_rec = collector_restarted.fetch_open_interest("ETHUSDT")
+        self.assertIsNotNone(oi_rec)
+        self.assertEqual(oi_rec["open_interest"], 50000.0)
+        # Fresh mark price 3120.50 from funding_and_mark_price in DB MUST be used:
+        self.assertAlmostEqual(oi_rec["open_interest_usd"], 50000.0 * 3120.50, places=2)
+
+        # Verify persisted row in SQLite open_interest table
+        with collector_restarted._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT open_interest, open_interest_usd FROM open_interest WHERE symbol = 'ETHUSDT'")
+            row = cur.fetchone()
+            self.assertEqual(row[0], 50000.0)
+            self.assertAlmostEqual(row[1], 50000.0 * 3120.50, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 31: Persistent 1m Candle Tracking and Chronological Missed Bar Replay
+    # -------------------------------------------------------------------------
+    def test_31_persistent_1m_candle_processing_and_chronological_replay(self):
+        """Test 31: Verify persistent 1m candle tracking, chronological missed bar replay, and duplicate prevention."""
+        p_db = os.path.join(self.test_dir, "paper_replay.db")
+        m_db = os.path.join(self.test_dir, "market_replay.db")
+
+        collector = MarketDataCollector(db_path=m_db)
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=10000.0, slippage_rate=0.001)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        now_dt = datetime.now(timezone.utc)
+        now_ms = int(now_dt.timestamp() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+        quotes = {"ETHUSDT": quote}
+
+        # Open LONG position at entry_time = 10 minutes ago
+        entry_dt = now_dt - timedelta(minutes=10)
+        entry_ms = int(entry_dt.timestamp() * 1000)
+        engine.open_position(runner.strategy_id, "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=entry_dt.isoformat())
+        self.assertIn((runner.strategy_id, "ETHUSDT"), engine.active_positions)
+
+        # Insert 5 completed 1m candles into market_data.db representing downtime bars
+        # Bars 1 and 2: neutral
+        # Bar 3: drops to 2890.0 (breaches SL 2900.0!)
+        # Bars 4 and 5: post-stop bars
+        klines = [
+            ("ETHUSDT", "1m", entry_ms + 60000, entry_ms + 119999, 3000.0, 3010.0, 2990.0, 3005.0, 100.0, 300000.0, 50.0, 100, entry_ms + 120000, entry_ms + 119999),
+            ("ETHUSDT", "1m", entry_ms + 120000, entry_ms + 179999, 3005.0, 3020.0, 3000.0, 3015.0, 100.0, 300000.0, 50.0, 100, entry_ms + 180000, entry_ms + 179999),
+            ("ETHUSDT", "1m", entry_ms + 180000, entry_ms + 239999, 3015.0, 3025.0, 2890.0, 2900.0, 150.0, 450000.0, 20.0, 200, entry_ms + 240000, entry_ms + 239999),
+            ("ETHUSDT", "1m", entry_ms + 240000, entry_ms + 299999, 2900.0, 2910.0, 2880.0, 2890.0, 100.0, 290000.0, 40.0, 100, entry_ms + 300000, entry_ms + 299999),
+            ("ETHUSDT", "1m", entry_ms + 300000, entry_ms + 359999, 2890.0, 2900.0, 2870.0, 2880.0, 100.0, 288000.0, 40.0, 100, entry_ms + 360000, entry_ms + 359999),
+        ]
+        with sqlite3.connect(m_db) as conn:
+            conn.executemany("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, klines)
+
+        # Replay missed bars chronologically
+        replayed_cnt = runner.replay_missed_completed_1m_bars(quotes)
+        self.assertEqual(replayed_cnt, 5)
+
+        # Active position MUST have been closed by Bar 3 (stop-loss touch)
+        self.assertNotIn((runner.strategy_id, "ETHUSDT"), engine.active_positions)
+
+        # Verify that all 5 bars were recorded in processed_1m_candles table
+        with sqlite3.connect(p_db) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM processed_1m_candles WHERE symbol = 'ETHUSDT'")
+            self.assertEqual(cur.fetchone()[0], 5)
+
+        # Replaying again immediately MUST process 0 new bars (duplicate prevention!)
+        replayed_again = runner.replay_missed_completed_1m_bars(quotes)
+        self.assertEqual(replayed_again, 0)
+
+    # -------------------------------------------------------------------------
+    # Test 32: Entry Causality — Candle Spanning Entry Time Never Triggers Stops/Targets
+    # -------------------------------------------------------------------------
+    def test_32_entry_causality_candle_spanning_entry_time(self):
+        """Test 32: Verify candle that opens before position entry but closes after entry cannot trigger stops/targets."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=10000.0)
+        now_ms = int(time.time() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+
+        # Position entered at 12:00:30.000 UTC
+        entry_time_str = "2024-01-01T12:00:30+00:00"
+        entry_ms = 1704110430000
+
+        engine.open_position("Strat_Causality", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=entry_time_str)
+
+        # Candle that opened at 12:00:00.000 (precedes entry!) and closed at 12:00:59.999 (after entry!)
+        # With extreme prices that would hit both SL (2800 <= 2900) and TP (3300 >= 3200)
+        spanning_bar_open = 1704110400000  # 12:00:00
+        spanning_bar_close = 1704110459999  # 12:00:59
+
+        trigger = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_Causality",
+            symbol="ETHUSDT",
+            bar_open=2950.0,
+            bar_high=3300.0,
+            bar_low=2800.0,
+            bar_close=3000.0,
+            bar_close_time=spanning_bar_close,
+            bar_open_time=spanning_bar_open
+        )
+
+        # Must return None! Entry causality strictly protects the position from prior price excursions.
+        self.assertIsNone(trigger)
+        self.assertIn(("Strat_Causality", "ETHUSDT"), engine.active_positions)
+
+        # Next candle opens at 12:01:00.000 (>= entry_ms) and touches SL
+        post_bar_open = 1704110460000
+        post_bar_close = 1704110519999
+        trigger_valid = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_Causality",
+            symbol="ETHUSDT",
+            bar_open=3000.0,
+            bar_high=3010.0,
+            bar_low=2890.0,  # below SL 2900.0
+            bar_close=2895.0,
+            bar_close_time=post_bar_close,
+            bar_open_time=post_bar_open
+        )
+        self.assertIsNotNone(trigger_valid)
+        self.assertEqual(trigger_valid[0], "stop_loss")
+
+    # -------------------------------------------------------------------------
+    # Test 33: Take-Profit Execution — Conservative Trade-Through Requirement
+    # -------------------------------------------------------------------------
+    def test_33_take_profit_trade_through_requirement(self):
+        """Test 33: Verify touching target price alone does not fill; trade-through by tick size required for Long and Short."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=20000.0)
+        now_dt = datetime.now(timezone.utc)
+        now_ms = int(now_dt.timestamp() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+
+        entry_time_str = now_dt.isoformat()
+        bar_open_time = now_ms + 60000
+        bar_close_time = now_ms + 119999
+
+        # 1. LONG Position: Entry 3000.0, SL 2900.0, TP 3200.0, ETHUSDT tick_size = 0.01
+        engine.open_position("Strat_TP_TT_L", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote, entry_time_str=entry_time_str)
+
+        # Case A: High touches exact target 3200.00 without trade-through
+        trigger_touch = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_TP_TT_L",
+            symbol="ETHUSDT",
+            bar_open=3100.0,
+            bar_high=3200.00,  # Mere touch
+            bar_low=3090.0,
+            bar_close=3180.0,
+            bar_open_time=bar_open_time,
+            bar_close_time=bar_close_time
+        )
+        # Touch alone must NOT fill!
+        self.assertIsNone(trigger_touch)
+
+        # Case B: High trades through by 1 tick (3200.01)
+        trigger_through = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_TP_TT_L",
+            symbol="ETHUSDT",
+            bar_open=3100.0,
+            bar_high=3200.01,  # 1-tick trade through
+            bar_low=3090.0,
+            bar_close=3190.0,
+            bar_open_time=bar_open_time,
+            bar_close_time=bar_close_time
+        )
+        self.assertEqual(trigger_through[0], "take_profit")
+        res_l = engine.close_position("Strat_TP_TT_L", "ETHUSDT", "take_profit")
+        self.assertAlmostEqual(res_l["exit_price"], 3200.00, places=2)
+
+        # 2. SHORT Position: Entry 3000.0, SL 3100.0, TP 2800.0, ETHUSDT tick_size = 0.01
+        engine.open_position("Strat_TP_TT_S", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote, entry_time_str=entry_time_str)
+
+        # Case A: Low touches exact target 2800.00 without trade-through
+        trigger_s_touch = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_TP_TT_S",
+            symbol="ETHUSDT",
+            bar_open=2900.0,
+            bar_high=2910.0,
+            bar_low=2800.00,  # Mere touch
+            bar_close=2820.0,
+            bar_open_time=bar_open_time,
+            bar_close_time=bar_close_time
+        )
+        # Touch alone must NOT fill!
+        self.assertIsNone(trigger_s_touch)
+
+        # Case B: Low trades through by 1 tick (2799.99)
+        trigger_s_through = engine.check_position_stops_and_gaps(
+            strategy_id="Strat_TP_TT_S",
+            symbol="ETHUSDT",
+            bar_open=2900.0,
+            bar_high=2910.0,
+            bar_low=2799.99,  # 1-tick trade through
+            bar_close=2810.0,
+            bar_open_time=bar_open_time,
+            bar_close_time=bar_close_time
+        )
+        self.assertEqual(trigger_s_through[0], "take_profit")
+        res_s = engine.close_position("Strat_TP_TT_S", "ETHUSDT", "take_profit")
+        self.assertAlmostEqual(res_s["exit_price"], 2800.00, places=2)
 
 
 if __name__ == "__main__":

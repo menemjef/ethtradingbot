@@ -434,29 +434,10 @@ async def run_full_system():
             if quotes:
                 exec_engine.update_mark_to_market(quotes)
 
-            # Check latest 1m bar for stops and adverse opening gaps
-            for sym in DEFAULT_SYMBOLS:
-                with collector._get_connection() as conn:
-                    cur = conn.cursor()
-                    cur.execute("""
-                    SELECT open_time, close_time, open, high, low, close
-                    FROM completed_klines
-                    WHERE symbol = ? AND timeframe = '1m'
-                    ORDER BY open_time DESC LIMIT 1
-                    """, (sym,))
-                    b_row = cur.fetchone()
-                    if b_row:
-                        bar = {
-                            "symbol": sym,
-                            "open_time": b_row[0],
-                            "close_time": b_row[1],
-                            "open": b_row[2],
-                            "high": b_row[3],
-                            "low": b_row[4],
-                            "close": b_row[5]
-                        }
-                        if runner.symbol == sym:
-                            runner.process_incoming_market_tick(quotes, current_bar=bar)
+            # 1. Replay missed completed 1m candles chronologically to ensure open positions receive every eligible bar
+            runner.replay_missed_completed_1m_bars(quotes)
+            # Update mark-to-market and check horizon expiry
+            runner.process_incoming_market_tick(quotes)
 
             # 2. Evaluate strategy on completed, 240-bar-verified 4H candles
             try:
