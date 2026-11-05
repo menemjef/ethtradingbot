@@ -52,6 +52,16 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+class CandleGapError(Exception):
+    """Raised when chronological 1m candle replay detects missing intervals."""
+    def __init__(self, message: str, symbol: str, gap_start: int, gap_end: int, missing_bars: int):
+        super().__init__(message)
+        self.symbol = symbol
+        self.gap_start = gap_start
+        self.gap_end = gap_end
+        self.missing_bars = missing_bars
+
+
 class CandidateAPaperRunner:
     """
     Forward paper-trading runner for Candidate A (Exp1_Momentum_Continuation_4H).
@@ -74,6 +84,7 @@ class CandidateAPaperRunner:
         self.strategy_id = strategy_id
         self.strategy_version = strategy_version
         self.last_processed_1m_open_time: Dict[str, int] = {}
+        self.flagged_gap_periods: List[Dict[str, Any]] = []
 
         self._init_runner_tables()
         self._load_processed_1m_open_times()
@@ -584,6 +595,7 @@ class CandidateAPaperRunner:
         if not os.path.exists(self.market_db_path):
             return 0
 
+        has_previous_processed = False
         last_ot = self.last_processed_1m_open_time.get(self.symbol)
         if last_ot is None:
             with self._get_connection() as conn:
@@ -596,6 +608,24 @@ class CandidateAPaperRunner:
                 if row and row[0] is not None:
                     last_ot = int(row[0])
                     self.last_processed_1m_open_time[self.symbol] = last_ot
+                    has_previous_processed = True
+        else:
+            has_previous_processed = True
+
+        # Determine exchange-adjusted reference timestamp
+        exchange_now = None
+        if isinstance(quotes, dict):
+            q = quotes.get(self.symbol, {})
+            if isinstance(q, dict):
+                exchange_now = q.get("exchange_ts") or q.get("timestamp") or q.get("receipt_ts")
+            if not exchange_now:
+                for sym_q in quotes.values():
+                    if isinstance(sym_q, dict):
+                        exchange_now = sym_q.get("exchange_ts") or sym_q.get("timestamp") or sym_q.get("receipt_ts")
+                        if exchange_now:
+                            break
+        if not exchange_now:
+            exchange_now = int(time.time() * 1000)
 
         pos = self.exec_engine.active_positions.get((self.strategy_id, self.symbol))
         if last_ot is None:
@@ -610,8 +640,8 @@ class CandidateAPaperRunner:
                     with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
                         cur = m_conn.cursor()
                         cur.execute(
-                            "SELECT MAX(open_time) FROM completed_klines WHERE symbol = ? AND timeframe = '1m'",
-                            (self.symbol,)
+                            "SELECT MAX(open_time) FROM completed_klines WHERE symbol = ? AND timeframe = '1m' AND close_time < ?",
+                            (self.symbol, exchange_now)
                         )
                         max_row = cur.fetchone()
                         last_ot = (int(max_row[0]) - 60000) if (max_row and max_row[0] is not None) else 0
@@ -619,7 +649,7 @@ class CandidateAPaperRunner:
                     last_ot = 0
             self.last_processed_1m_open_time[self.symbol] = last_ot
 
-        bars_to_process = []
+        raw_bars = []
         try:
             with sqlite3.connect(self.market_db_path, timeout=10.0) as m_conn:
                 cur = m_conn.cursor()
@@ -630,10 +660,15 @@ class CandidateAPaperRunner:
                 ORDER BY open_time ASC
                 """, (self.symbol, last_ot))
                 for r in cur.fetchall():
-                    bars_to_process.append({
+                    c_close = int(r[1])
+                    # Issue 2: Never replay a 1m candle unless its close_time is strictly earlier than current exchange-adjusted time
+                    if c_close >= exchange_now:
+                        logger.debug(f"Skipping unfinished 1m candle in replay: close_time {c_close} >= exchange_now {exchange_now}")
+                        continue
+                    raw_bars.append({
                         "symbol": self.symbol,
                         "open_time": int(r[0]),
-                        "close_time": int(r[1]),
+                        "close_time": c_close,
                         "open": float(r[2]),
                         "high": float(r[3]),
                         "low": float(r[4]),
@@ -642,6 +677,55 @@ class CandidateAPaperRunner:
         except Exception as e:
             logger.error(f"Error querying missed 1m bars from market_data.db: {e}")
             return 0
+
+        # Deduplicate bars by open_time in case of duplicate entries
+        seen_ots = set()
+        bars_to_process = []
+        for b in raw_bars:
+            if b["open_time"] not in seen_ots:
+                seen_ots.add(b["open_time"])
+                bars_to_process.append(b)
+
+        if not bars_to_process:
+            return 0
+
+        # Issue 3: Verify chronological contiguous intervals without missing minutes
+        # Check gap between last_ot and first bar (if the runner previously processed candles)
+        if has_previous_processed and last_ot is not None and last_ot > 0:
+            expected_first_ot = last_ot + EXPECTED_1M_INTERVAL_MS
+            first_ot = bars_to_process[0]["open_time"]
+            if first_ot > expected_first_ot:
+                missing = int((first_ot - expected_first_ot) // EXPECTED_1M_INTERVAL_MS)
+                gap_info = {
+                    "symbol": self.symbol,
+                    "gap_start": expected_first_ot,
+                    "gap_end": first_ot,
+                    "missing_bars": missing,
+                    "flagged_at": datetime.now(timezone.utc).isoformat()
+                }
+                self.flagged_gap_periods.append(gap_info)
+                msg = f"Candle gap detected for {self.symbol} between last processed {last_ot} and next bar {first_ot} ({missing} missing bars)."
+                logger.critical(msg)
+                raise CandleGapError(msg, self.symbol, expected_first_ot, first_ot, missing)
+
+        # Check gaps between consecutive bars
+        for i in range(len(bars_to_process) - 1):
+            curr_ot = bars_to_process[i]["open_time"]
+            next_ot = bars_to_process[i + 1]["open_time"]
+            expected_next = curr_ot + EXPECTED_1M_INTERVAL_MS
+            if next_ot > expected_next:
+                missing = int((next_ot - expected_next) // EXPECTED_1M_INTERVAL_MS)
+                gap_info = {
+                    "symbol": self.symbol,
+                    "gap_start": expected_next,
+                    "gap_end": next_ot,
+                    "missing_bars": missing,
+                    "flagged_at": datetime.now(timezone.utc).isoformat()
+                }
+                self.flagged_gap_periods.append(gap_info)
+                msg = f"Candle gap detected for {self.symbol} between bar {curr_ot} and {next_ot} ({missing} missing bars)."
+                logger.critical(msg)
+                raise CandleGapError(msg, self.symbol, expected_next, next_ot, missing)
 
         processed_count = 0
         for bar in bars_to_process:

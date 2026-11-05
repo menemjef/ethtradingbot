@@ -288,21 +288,24 @@ class PaperExecutionEngine:
             elif "strategy_id" not in trade_cols:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
 
-            # 7. Versioned one-time migration: Phase 2.2E available-cash portfolio conversion
+            # 7. Versioned one-time migration: Phase 2.2F portfolio repair and available-cash conversion
             conn.execute("""
             CREATE TABLE IF NOT EXISTS paper_schema_migrations (
                 migration_id TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
             """)
-            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id IN ('phase_2_2d_available_cash_migration', 'phase_2_2e_portfolio_migration')")
+            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2f_portfolio_migration'")
             if cur.fetchone()[0] == 0:
                 # Inspect active open positions in paper_positions
                 cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
                 open_margin = float(cur.fetchone()[0])
 
-                # Check current paper_portfolio
-                cur.execute("SELECT id, cash_balance, equity, unrealized_pnl, margin_used, peak_equity, realized_pnl FROM paper_portfolio ORDER BY id DESC LIMIT 1")
+                # Check latest row in paper_portfolio
+                cur.execute("""
+                SELECT id, cash_balance, equity, unrealized_pnl, margin_used, peak_equity, realized_pnl
+                FROM paper_portfolio ORDER BY id DESC LIMIT 1
+                """)
                 port_row = cur.fetchone()
                 if port_row and open_margin > 0:
                     p_id = port_row[0]
@@ -313,31 +316,47 @@ class PaperExecutionEngine:
                     p_peak = float(port_row[5])
                     p_realized = float(port_row[6])
 
-                    # Detection of legacy Phase 2.2B state:
-                    # In Phase 2.2B, equity was computed as:
+                    # Detection of legacy incorrect balance (even if phase_2_2d_available_cash_migration was marked!):
+                    # In Phase 2.2B:
                     #   equity = cash_balance + margin_used + unrealized_pnl
                     # where cash_balance was NOT decremented by margin_req on entry.
-                    # As a result, both cash_balance and equity were inflated by margin_used:
-                    #   legacy_cash = available_cash + open_margin
-                    #   legacy_equity = true_equity + open_margin
-                    #
-                    # Signature check for Phase 2.2B unmigrated state:
-                    is_legacy_22b = (
-                        abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1
-                        or abs(p_equity - (p_cash + p_margin + p_unrealized)) < 0.1
-                        or (p_cash + open_margin > initial_capital + p_realized - 1.0)
-                        or abs(p_cash - p_equity) < 1.0
+                    # As a result, equity was inflated: legacy_equity ≈ available_cash + 2 * open_margin + unrealized
+                    # In Phase 2.2D partial migration: cash was decremented but equity was NOT decremented.
+                    needs_cash_migration = (p_cash + open_margin > initial_capital + p_realized - 1.0) or (abs(p_cash - p_equity) < 1.0)
+                    needs_equity_migration = (
+                        (abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1 and needs_cash_migration)
+                        or (abs(p_equity - (p_cash + 2 * open_margin + p_unrealized)) < 0.1)
+                        or (p_equity > initial_capital + p_realized + p_unrealized + 0.5 * open_margin)
                     )
-                    if is_legacy_22b:
-                        new_cash = max(0.0, p_cash - open_margin)
-                        # Check whether legacy equity was also inflated by open_margin
-                        if abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1 or abs(p_equity - (p_cash + p_margin + p_unrealized)) < 0.1:
-                            new_equity = p_equity - open_margin
-                            new_peak = max(new_equity, p_peak - open_margin)
-                        else:
-                            new_equity = new_cash + open_margin + p_unrealized
-                            new_peak = max(new_equity, p_peak)
 
+                    if needs_cash_migration or needs_equity_migration:
+                        new_cash = (p_cash - open_margin) if needs_cash_migration else p_cash
+                        new_equity = new_cash + open_margin + p_unrealized
+
+                        # Peak Equity Migration (Issue 4):
+                        # Correctly calculate historical peak equity without blindly subtracting open_margin.
+                        cur.execute("SELECT equity, margin_used, unrealized_pnl, cash_balance FROM paper_portfolio ORDER BY id ASC")
+                        all_rows = cur.fetchall()
+                        historical_true_equities = [initial_capital, new_equity]
+                        for r_eq, r_mg, r_unreal, r_c in all_rows:
+                            r_eq, r_mg, r_unreal, r_c = float(r_eq), float(r_mg), float(r_unreal), float(r_c)
+                            if r_mg > 0:
+                                # Check if this historical row was inflated by Phase 2.2B double-counting
+                                if (abs(r_eq - (r_c + r_mg + r_unreal)) < 0.1) or (r_c + r_mg > initial_capital - 100.0) or (r_eq > initial_capital + 0.5 * r_mg):
+                                    true_r_eq = r_eq - r_mg
+                                else:
+                                    true_r_eq = r_eq
+                            else:
+                                true_r_eq = r_eq
+                            historical_true_equities.append(true_r_eq)
+
+                        # If p_peak > p_equity, peak was achieved before position opened (with margin 0), so preserve it!
+                        if p_peak > p_equity:
+                            historical_true_equities.append(p_peak)
+                        else:
+                            historical_true_equities.append(p_peak - open_margin)
+
+                        new_peak = max(historical_true_equities)
                         new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
 
                         conn.execute("""
@@ -353,12 +372,13 @@ class PaperExecutionEngine:
                             p_id
                         ))
                         logger.info(
-                            f"Phase 2.2E Migration: converted legacy portfolio (cash ${p_cash:.2f} -> ${new_cash:.2f}, "
-                            f"equity ${p_equity:.2f} -> ${new_equity:.2f}, margin: ${open_margin:.2f})"
+                            f"Phase 2.2F Migration: repaired portfolio (cash ${p_cash:.2f} -> ${new_cash:.2f}, "
+                            f"equity ${p_equity:.2f} -> ${new_equity:.2f}, peak ${p_peak:.2f} -> ${new_peak:.2f}, "
+                            f"margin: ${open_margin:.2f})"
                         )
 
                 now_mig_str = datetime.now(timezone.utc).isoformat()
-                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2e_portfolio_migration', ?)", (now_mig_str,))
+                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2f_portfolio_migration', ?)", (now_mig_str,))
 
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")

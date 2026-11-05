@@ -525,8 +525,21 @@ class MarketDataCollector:
             return []
 
         receipt_ts = int(time.time() * 1000)
+        # Determine exchange-adjusted reference timestamp
+        last_ex = max(
+            self.stream_health.get("market", {}).get("last_exchange_ts", 0),
+            self.stream_health.get("public", {}).get("last_exchange_ts", 0)
+        )
+        ref_time_ms = last_ex if last_ex > 0 else receipt_ts
+
         klines = []
         for row in data:
+            c_close_time = int(row[6])
+            # Filter out unfinished candles: close_time must be strictly earlier than current exchange-adjusted time
+            if c_close_time >= ref_time_ms:
+                logger.debug(f"Skipping unfinished REST candle: close_time {c_close_time} >= ref_time {ref_time_ms}")
+                continue
+
             klines.append({
                 "symbol": symbol,
                 "timeframe": interval,
@@ -536,11 +549,11 @@ class MarketDataCollector:
                 "low": float(row[3]),
                 "close": float(row[4]),
                 "volume": float(row[5]),
-                "close_time": int(row[6]),
+                "close_time": c_close_time,
                 "quote_volume": float(row[7]),
                 "trades_count": int(row[8]),
                 "taker_buy_volume": float(row[9]),
-                "exchange_ts": int(row[6]),
+                "exchange_ts": c_close_time,
                 "receipt_ts": receipt_ts
             })
         return klines

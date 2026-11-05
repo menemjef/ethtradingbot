@@ -38,7 +38,7 @@ from paper.config import (
 )
 from paper.collector import MarketDataCollector
 from paper.execution import PaperExecutionEngine
-from paper.strategy_runner import CandidateAPaperRunner
+from paper.strategy_runner import CandidateAPaperRunner, CandleGapError
 
 logger = logging.getLogger("paper.supervisor")
 if not logger.handlers:
@@ -435,7 +435,10 @@ async def run_full_system():
                 exec_engine.update_mark_to_market(quotes)
 
             # 1. Replay missed completed 1m candles chronologically to ensure open positions receive every eligible bar
-            runner.replay_missed_completed_1m_bars(quotes)
+            try:
+                runner.replay_missed_completed_1m_bars(quotes)
+            except CandleGapError as e:
+                logger.critical(f"Candle gap detected during 1m replay: {e}. Failing closed to prevent unmonitored risk.")
             # Update mark-to-market and check horizon expiry
             runner.process_incoming_market_tick(quotes)
 

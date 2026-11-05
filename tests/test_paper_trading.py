@@ -46,7 +46,7 @@ if BASE_DIR not in sys.path:
 
 from paper.collector import MarketDataCollector
 from paper.execution import PaperExecutionEngine, StaleQuoteError
-from paper.strategy_runner import CandidateAPaperRunner
+from paper.strategy_runner import CandidateAPaperRunner, CandleGapError
 from paper.run_paper_system import acquire_pid_lock, release_pid_lock, is_pid_alive
 import paper.config as paper_cfg
 
@@ -1342,7 +1342,7 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         conn.close()
 
         # Case B: Evaluated 2 minutes after candle close (fresh: age = 120s <= 900s)
-        quotes["ETHUSDT"]["receipt_ts"] = int(time.time() * 1000)
+        quotes["ETHUSDT"]["receipt_ts"] = int(time.time() * 1000) + 10000
         fresh_eval_time = candle_64_close + timedelta(minutes=2)
         runner.evaluate_new_completed_candles(quotes, now_utc=fresh_eval_time)
 
@@ -1779,6 +1779,272 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         self.assertEqual(trigger_s_through[0], "take_profit")
         res_s = engine.close_position("Strat_TP_TT_S", "ETHUSDT", "take_profit")
         self.assertAlmostEqual(res_s["exit_price"], 2800.00, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 34: Migration with existing phase_2_2d_available_cash_migration marker
+    # -------------------------------------------------------------------------
+    def test_34_migration_with_existing_phase_2_2d_marker_and_legacy_balance(self):
+        """Test 34: Verify database with phase_2_2d_available_cash_migration marker and incorrect balance is repaired and runs once."""
+        mig_db = os.path.join(self.test_dir, "mig_test_34.db")
+        # Initialize full tables via PaperExecutionEngine
+        _init_eng = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        del _init_eng
+
+        conn = sqlite3.connect(mig_db)
+        # Clear migration records and insert previous phase 2.2d marker
+        conn.execute("DELETE FROM paper_schema_migrations;")
+        conn.execute("INSERT INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2d_available_cash_migration', '2024-01-01T00:00:00Z');")
+
+        # Insert open position with 1000 margin
+        conn.execute("DELETE FROM paper_positions;")
+        conn.execute("""
+        INSERT INTO paper_positions (
+            position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage,
+            stop_loss, take_profit, entry_time, status, accumulated_funding
+        ) VALUES (
+            'pos_mig_34', 'Strat_Mig', 'ETHUSDT', 'LONG', 3000.0, 1.0, 3000.0, 1000.0, 0.3,
+            2900.0, 3200.0, '2024-01-01T12:00:00+00:00', 'OPEN', 0.0
+        );
+        """)
+
+        # Clear paper_portfolio and insert legacy inflated balance (cash 9998.50, equity 11048.50, peak 11048.50)
+        conn.execute("DELETE FROM paper_portfolio;")
+        conn.execute("""
+        INSERT INTO paper_portfolio (
+            id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+            margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+        ) VALUES (
+            1, '2024-01-01T12:00:00+00:00', 9998.50, 11048.50, 0.0, 50.0,
+            1000.0, 11048.50, 0.0, 0.3, 0.3
+        );
+        """)
+        conn.commit()
+        conn.close()
+
+        # Initialize engine: must trigger phase_2_2f repair even though phase_2_2d marker exists!
+        engine = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertAlmostEqual(engine.portfolio["cash_balance"], 8998.50, places=2)
+        self.assertAlmostEqual(engine.portfolio["margin_used"], 1000.0, places=2)
+        self.assertAlmostEqual(engine.portfolio["unrealized_pnl"], 50.00, places=2)
+        self.assertAlmostEqual(engine.portfolio["equity"], 10048.50, places=2)
+        self.assertAlmostEqual(engine.portfolio["peak_equity"], 10048.50, places=2)
+        self.assertAlmostEqual(
+            engine.portfolio["equity"],
+            engine.portfolio["cash_balance"] + engine.portfolio["margin_used"] + engine.portfolio["unrealized_pnl"],
+            places=2
+        )
+
+        # Verify paper_schema_migrations records phase_2_2f_portfolio_migration
+        conn = sqlite3.connect(mig_db)
+        cur = conn.cursor()
+        cur.execute("SELECT migration_id FROM paper_schema_migrations")
+        mig_ids = [r[0] for r in cur.fetchall()]
+        conn.close()
+        self.assertIn("phase_2_2f_portfolio_migration", mig_ids)
+
+        # Re-initialize to verify migration runs exactly once and is idempotent
+        engine2 = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertAlmostEqual(engine2.portfolio["cash_balance"], 8998.50, places=2)
+        self.assertAlmostEqual(engine2.portfolio["equity"], 10048.50, places=2)
+        self.assertAlmostEqual(engine2.portfolio["peak_equity"], 10048.50, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 35: Peak Equity Migration Before and After Position Opened
+    # -------------------------------------------------------------------------
+    def test_35_peak_equity_migration_before_and_after_position_opened(self):
+        """Test 35: Verify peak equity is correctly migrated for peaks occurring before vs after positions were opened."""
+        # Case A: Peak occurred BEFORE position opened ($12,000 peak achieved when margin was 0)
+        db_a = os.path.join(self.test_dir, "peak_test_a.db")
+        _init_a = PaperExecutionEngine(db_path=db_a, market_db_path=self.market_db, initial_capital=10000.0)
+        del _init_a
+
+        conn_a = sqlite3.connect(db_a)
+        conn_a.execute("DELETE FROM paper_schema_migrations;")
+        conn_a.execute("DELETE FROM paper_positions;")
+        conn_a.execute("DELETE FROM paper_portfolio;")
+
+        # Row 1: Historical peak of $12,000 achieved when margin was 0 (realized profit from previous trade)
+        conn_a.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (1, '2024-01-01T10:00:00+00:00', 12000.0, 12000.0, 2000.0, 0.0, 0.0, 12000.0, 0.0, 0.0, 0.0);
+        """)
+        # Open position with 1000 margin
+        conn_a.execute("""
+        INSERT INTO paper_positions (position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage, stop_loss, take_profit, entry_time, status, accumulated_funding)
+        VALUES ('pos_a', 'Strat_A', 'ETHUSDT', 'LONG', 3000.0, 1.0, 3000.0, 1000.0, 0.3, 2900.0, 3200.0, '2024-01-01T12:00:00+00:00', 'OPEN', 0.0);
+        """)
+        # Row 2: After position opened, legacy cash 11998.50, unrealized -200, legacy equity 12798.50, peak 12000.0
+        conn_a.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (2, '2024-01-01T12:00:00+00:00', 11998.50, 12798.50, 2000.0, -200.0, 1000.0, 12000.0, 0.0, 0.3, 0.3);
+        """)
+        conn_a.commit()
+        conn_a.close()
+
+        engine_a = PaperExecutionEngine(db_path=db_a, market_db_path=self.market_db, initial_capital=10000.0)
+        # Peak achieved before position opened ($12,000) must NOT have open_margin subtracted!
+        self.assertAlmostEqual(engine_a.portfolio["peak_equity"], 12000.0, places=2)
+        self.assertAlmostEqual(engine_a.portfolio["cash_balance"], 10998.50, places=2)
+        self.assertAlmostEqual(engine_a.portfolio["equity"], 11798.50, places=2)
+
+        # Case B: Peak occurred AFTER position opened (inflated by open margin during position)
+        db_b = os.path.join(self.test_dir, "peak_test_b.db")
+        _init_b = PaperExecutionEngine(db_path=db_b, market_db_path=self.market_db, initial_capital=10000.0)
+        del _init_b
+
+        conn_b = sqlite3.connect(db_b)
+        conn_b.execute("DELETE FROM paper_schema_migrations;")
+        conn_b.execute("DELETE FROM paper_positions;")
+        conn_b.execute("DELETE FROM paper_portfolio;")
+
+        # Row 1: Initial $10,000
+        conn_b.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (1, '2024-01-01T10:00:00+00:00', 10000.0, 10000.0, 0.0, 0.0, 0.0, 10000.0, 0.0, 0.0, 0.0);
+        """)
+        # Open position with 1000 margin
+        conn_b.execute("""
+        INSERT INTO paper_positions (position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage, stop_loss, take_profit, entry_time, status, accumulated_funding)
+        VALUES ('pos_b', 'Strat_B', 'ETHUSDT', 'LONG', 3000.0, 1.0, 3000.0, 1000.0, 0.3, 2900.0, 3200.0, '2024-01-01T12:00:00+00:00', 'OPEN', 0.0);
+        """)
+        # Row 2: Peak occurred during position with unrealized PnL +50. In legacy 2.2B, equity was 11048.50, peak was 11048.50
+        conn_b.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (2, '2024-01-01T12:00:00+00:00', 9998.50, 11048.50, 0.0, 50.0, 1000.0, 11048.50, 0.0, 0.3, 0.3);
+        """)
+        conn_b.commit()
+        conn_b.close()
+
+        engine_b = PaperExecutionEngine(db_path=db_b, market_db_path=self.market_db, initial_capital=10000.0)
+        # Peak achieved during position must be uninflated by open_margin: 11048.50 - 1000.0 = 10048.50
+        self.assertAlmostEqual(engine_b.portfolio["peak_equity"], 10048.50, places=2)
+        self.assertAlmostEqual(engine_b.portfolio["cash_balance"], 8998.50, places=2)
+        self.assertAlmostEqual(engine_b.portfolio["equity"], 10048.50, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 36: Incomplete Candles Exclusion in REST Backfill and 1m Replay
+    # -------------------------------------------------------------------------
+    def test_36_rest_backfill_and_replay_incomplete_candle_exclusion(self):
+        """Test 36: Verify unfinished/forming candles are strictly excluded from REST backfill and 1m replay."""
+        collector = MarketDataCollector(symbols=["ETHUSDT"], db_path=self.market_db)
+        exchange_now = 1700000100000
+
+        # Set stream health exchange_ts
+        collector.stream_health["market"]["last_exchange_ts"] = exchange_now
+
+        # 1. Test REST Backfill: mock Binance REST response with 2 candles
+        mock_raw_data = [
+            # Candle 1: completed in past (close_time 1700000059999 < 1700000100000)
+            [1700000000000, "3000.0", "3010.0", "2990.0", "3005.0", "10.0", 1700000059999, "30000.0", 50, "5.0", "15000.0", "0"],
+            # Candle 2: unfinished/forming (close_time 1700000119999 >= 1700000100000)
+            [1700000060000, "3005.0", "3015.0", "3000.0", "3010.0", "5.0", 1700000119999, "15000.0", 25, "2.0", "6000.0", "0"],
+        ]
+        import unittest.mock as mock
+        with mock.patch("urllib.request.urlopen") as mock_url:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps(mock_raw_data).encode("utf-8")
+            mock_url.return_value.__enter__.return_value = mock_resp
+
+            klines = collector.fetch_rest_klines("ETHUSDT", "1m", limit=2)
+            # Candle 2 must be excluded!
+            self.assertEqual(len(klines), 1)
+            self.assertEqual(klines[0]["open_time"], 1700000000000)
+            self.assertEqual(klines[0]["close_time"], 1700000059999)
+
+        # 2. Test 1m Replay: Insert both completed and unfinished candles into completed_klines
+        m_db = os.path.join(self.test_dir, "test_market_36.db")
+        p_db = os.path.join(self.test_dir, "test_paper_36.db")
+        c2 = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del c2
+
+        k_rows = [
+            # Completed candle
+            ("ETHUSDT", "1m", 1700000000000, 1700000059999, 3000.0, 3010.0, 2990.0, 3005.0, 10.0, 30000.0, 5.0, 50, exchange_now, 1700000059999),
+            # Unfinished forming candle
+            ("ETHUSDT", "1m", 1700000060000, 1700000119999, 3005.0, 3015.0, 3000.0, 3010.0, 5.0, 15000.0, 2.0, 25, exchange_now, 1700000119999),
+        ]
+        with sqlite3.connect(m_db) as conn:
+            conn.executemany("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, k_rows)
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=10000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        quotes = {
+            "ETHUSDT": {
+                "bid": 3005.0, "ask": 3005.10, "exchange_ts": exchange_now, "receipt_ts": exchange_now, "timestamp": exchange_now
+            }
+        }
+        replayed = runner.replay_missed_completed_1m_bars(quotes)
+        # Unfinished candle (close_time 1700000119999 >= exchange_now 1700000100000) must NEVER be replayed!
+        self.assertEqual(replayed, 1)
+        self.assertEqual(runner.last_processed_1m_open_time["ETHUSDT"], 1700000000000)
+
+    # -------------------------------------------------------------------------
+    # Test 37: Candle Gap Detection Flags Period and Fails Closed
+    # -------------------------------------------------------------------------
+    def test_37_candle_gap_detection_flags_period_and_fails_closed(self):
+        """Test 37: Verify chronological 1m replay detects missing intervals, flags the period, and fails closed."""
+        m_db = os.path.join(self.test_dir, "test_market_37.db")
+        p_db = os.path.join(self.test_dir, "test_paper_37.db")
+        c = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del c
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=10000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        base_ot = 1700000000000
+        # Simulate that runner previously processed candle at base_ot
+        with runner._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO processed_1m_candles (strategy_id, symbol, open_time, close_time, processed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """, (runner.strategy_id, "ETHUSDT", base_ot, base_ot + 59999, "2024-01-01T00:00:00Z"))
+        runner._load_processed_1m_open_times()
+        self.assertEqual(runner.last_processed_1m_open_time["ETHUSDT"], base_ot)
+
+        # Now insert bars with a gap:
+        # Expected next bar is base_ot + 60,000 (1700000060000).
+        # We insert bar at base_ot + 180,000 (1700000180000) -> 2 missing minutes!
+        k_rows = [
+            ("ETHUSDT", "1m", base_ot + 180000, base_ot + 239999, 3000.0, 3010.0, 2990.0, 3005.0, 10.0, 30000.0, 5.0, 50, base_ot + 300000, base_ot + 239999),
+        ]
+        with sqlite3.connect(m_db) as conn:
+            conn.executemany("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, k_rows)
+
+        quotes = {
+            "ETHUSDT": {
+                "bid": 3005.0, "ask": 3005.10, "exchange_ts": base_ot + 300000, "receipt_ts": base_ot + 300000, "timestamp": base_ot + 300000
+            }
+        }
+
+        # Calling replay_missed_completed_1m_bars MUST raise CandleGapError and fail closed!
+        with self.assertRaises(CandleGapError) as ctx:
+            runner.replay_missed_completed_1m_bars(quotes)
+
+        # Verify flagged gap period
+        err = ctx.exception
+        self.assertEqual(err.symbol, "ETHUSDT")
+        self.assertEqual(err.gap_start, base_ot + 60000)
+        self.assertEqual(err.gap_end, base_ot + 180000)
+        self.assertEqual(err.missing_bars, 2)
+
+        self.assertEqual(len(runner.flagged_gap_periods), 1)
+        self.assertEqual(runner.flagged_gap_periods[0]["gap_start"], base_ot + 60000)
+        self.assertEqual(runner.flagged_gap_periods[0]["gap_end"], base_ot + 180000)
+        self.assertEqual(runner.flagged_gap_periods[0]["missing_bars"], 2)
+
+        # Fail closed: last_processed_1m_open_time MUST NOT have advanced past the gap!
+        self.assertEqual(runner.last_processed_1m_open_time["ETHUSDT"], base_ot)
 
 
 if __name__ == "__main__":
