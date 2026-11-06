@@ -16,6 +16,7 @@ from config import (
 from data.fetcher import fetch_ohlcv
 from data.preprocessor import build_features, transform
 from model.architecture import HybridModel
+from utils.quant_evaluation import calculate_actual_stop_position_sizing
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(message)s')
 logger = logging.getLogger("backtest")
@@ -29,11 +30,16 @@ SL_MULT               = 1.5     # Stop Loss   = 1.5x ATR (Breathing room)
 MAX_HOLD_BARS         = 12      # Force-close after 12 hours
 MAX_DAILY_LOSS_PCT    = 0.20    # Drawdown limit
 
-def run_backtest(initial_balance: float = 100.0, limit: int = 1000, since_ms: int = None):
-    logger.info(f"━━━ Walk-Forward Backtest | ${initial_balance:.2f} | {limit} candles ━━━")
+def run_backtest(
+    initial_balance: float = 100.0,
+    limit: int = 1000,
+    since_ms: int = None,
+    symbol: str = SYMBOL,
+):
+    logger.info(f"━━━ Walk-Forward Backtest ({symbol}) | ${initial_balance:.2f} | {limit} candles ━━━")
 
     # 1. Fetch & preprocess
-    df = fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit, since_ms=since_ms)
+    df = fetch_ohlcv(symbol, TIMEFRAME, limit=limit, since_ms=since_ms)
     if df.empty:
         logger.error("No data fetched."); return
     df_feat = build_features(df, add_targets=False)
@@ -54,11 +60,12 @@ def run_backtest(initial_balance: float = 100.0, limit: int = 1000, since_ms: in
     trade_pnls   = []
     daily_start  = balance  # Reset every 24 bars
 
-    # Validation-only: skip the first 80% (training data) for honest results
-    val_start = int(len(df_feat) * TRAIN_SPLIT)
-    logger.info(f"Validation-only backtest: starting from candle {val_start} of {len(df_feat)} (last {100-TRAIN_SPLIT*100:.0f}%)")
+    # Validation-only: skip the first 80% (training data) plus purge window (LOOKBACK + MAX_HOLD_BARS)
+    purge_bars = LOOKBACK + MAX_HOLD_BARS
+    val_start = int(len(df_feat) * TRAIN_SPLIT) + purge_bars
+    logger.info(f"Validation-only backtest: starting from candle {val_start} of {len(df_feat)} (purge={purge_bars} bars)")
 
-    trade_exit_bar = 0  # Track when current trade exits to prevent overlapping trades
+    trade_exit_bar = -1  # Track when current trade exits to prevent overlapping trades
 
     for i in range(max(LOOKBACK, val_start), len(df_feat) - 1):
         # Daily reset (every 24 hourly bars)
@@ -69,7 +76,7 @@ def run_backtest(initial_balance: float = 100.0, limit: int = 1000, since_ms: in
         if daily_start > 0 and (daily_start - balance) / daily_start > MAX_DAILY_LOSS_PCT:
             continue  # Skip trading for rest of this "day"
 
-        # FIX: Skip bars where we're still in a trade (prevents impossible overlapping trades)
+        # Skip bars where we're still in a trade (prevents impossible overlapping trades)
         if i <= trade_exit_bar:
             continue
 
@@ -93,88 +100,109 @@ def run_backtest(initial_balance: float = 100.0, limit: int = 1000, since_ms: in
             continue  # Not strong enough — skip
 
         side = "LONG" if pred > 0 else "SHORT"
+        side_sign = 1 if side == "LONG" else -1
         from config import LONG_ONLY_MODE
         if LONG_ONLY_MODE and side == "SHORT":
             continue
-        # FIX: Entry at close of i-1 (the last bar the model saw), NOT close of i
-        # In live: model sees current candle, enters at its close. Same logic here.
-        entry_price = df_feat["close"].iloc[i - 1]
-        atr = df_feat["atr_14"].iloc[i - 1]
+        # Signal at close of bar i-1 executes at NEXT bar i open with adverse slippage
+        raw_entry_price = float(df_feat["open"].iloc[i])
+        entry_price = raw_entry_price * (1.0 + SLIPPAGE_RATE) if side == "LONG" else raw_entry_price * (1.0 - SLIPPAGE_RATE)
+        atr = float(df_feat["atr_14"].iloc[i - 1])
         if atr <= 0 or np.isnan(atr):
             continue
 
-        # 5. Position sizing (risk-based on ATR)
+        # 5. Position sizing (risk-based on ATR, strictly capped by LEVERAGE and available cash)
         sl_dist = atr * SL_MULT
         tp_dist = atr * PT_MULT
-        risk_usd = balance * RISK_PCT
-        position_size = risk_usd / sl_dist   # In ETH units
-
         if side == "LONG":
-            sl_price = entry_price - sl_dist
-            tp_price = entry_price + tp_dist
+            sl_price = raw_entry_price - sl_dist
+            tp_price = raw_entry_price + tp_dist
         else:
-            sl_price = entry_price + sl_dist
-            tp_price = entry_price - tp_dist
+            sl_price = raw_entry_price + sl_dist
+            tp_price = raw_entry_price - tp_dist
 
-        # 6. Simulate trade outcome (walk forward bar by bar)
-        # FIX: TP/SL checking starts at bar i (the first bar AFTER entry at close of i-1)
+        sizing = calculate_actual_stop_position_sizing(
+            account_equity=balance,
+            entry_price=entry_price,
+            stop_price=sl_price,
+            risk_pct=RISK_PCT,
+            max_leverage=float(LEVERAGE),
+            available_cash=balance,
+        )
+        notional = sizing["notional"]
+        if notional <= 0.0:
+            continue
+        position_size = notional / entry_price
+
+        # 6. Simulate trade outcome (walk forward bar by bar starting at bar i)
         bars_held = 0
-        outcome = 0.0
+        raw_exit_price = float(df_feat["close"].iloc[i])
         hit = False
-        exit_bar = i  # default
+        exit_bar = i
+        funding_drag = 0.0
 
         for j in range(i, min(i + MAX_HOLD_BARS, len(df_feat))):
             bars_held += 1
-            high_j = df_feat["high"].iloc[j]
-            low_j  = df_feat["low"].iloc[j]
+            open_j = float(df_feat["open"].iloc[j])
+            high_j = float(df_feat["high"].iloc[j])
+            low_j  = float(df_feat["low"].iloc[j])
+            ts_j = df_feat.index[j]
+
+            if "funding_rate" in df_feat.columns and hasattr(ts_j, "hour") and ts_j.hour in (0, 8, 16) and ts_j.minute == 0:
+                f_rate = float(df_feat["funding_rate"].iloc[j])
+                if not np.isnan(f_rate):
+                    funding_drag += side_sign * f_rate
 
             if side == "LONG":
-                # Check SL first (conservative: assume SL hit before TP on same bar)
-                if low_j <= sl_price:
-                    outcome = position_size * (sl_price - entry_price)
-                    if outcome < 0: losses += 1
+                # Opening gap check first, then stop-first on same-bar collision
+                if j > i and open_j <= sl_price:
+                    raw_exit_price = open_j
+                    hit = True; exit_bar = j; break
+                elif low_j <= sl_price:
+                    raw_exit_price = sl_price
                     hit = True; exit_bar = j; break
                 elif high_j >= tp_price:
-                    outcome = position_size * (tp_price - entry_price)
-                    wins += 1; hit = True; exit_bar = j; break
-                
-                # BREAK-EVEN LOGIC: If price reaches halfway to TP, move SL to Entry
+                    raw_exit_price = tp_price
+                    hit = True; exit_bar = j; break
+
+                # Break-even stop update applies ONLY to subsequent bars j+1 (causal)
                 if high_j >= entry_price + (tp_dist / 2.0):
                     sl_price = max(sl_price, entry_price)
 
             else:
-                if high_j >= sl_price:
-                    outcome = position_size * (entry_price - sl_price)
-                    if outcome < 0: losses += 1
+                if j > i and open_j >= sl_price:
+                    raw_exit_price = open_j
+                    hit = True; exit_bar = j; break
+                elif high_j >= sl_price:
+                    raw_exit_price = sl_price
                     hit = True; exit_bar = j; break
                 elif low_j <= tp_price:
-                    outcome = position_size * (entry_price - tp_price)
-                    wins += 1; hit = True; exit_bar = j; break
-                
-                # BREAK-EVEN LOGIC: If price reaches halfway to TP, move SL to Entry
+                    raw_exit_price = tp_price
+                    hit = True; exit_bar = j; break
+
+                # Break-even stop update applies ONLY to subsequent bars j+1 (causal)
                 if low_j <= entry_price - (tp_dist / 2.0):
                     sl_price = min(sl_price, entry_price)
 
         # Force close at market if horizontal barrier hit
         if not hit:
             exit_bar = min(i + MAX_HOLD_BARS - 1, len(df_feat) - 1)
-            exit_price = df_feat["close"].iloc[exit_bar]
-            if side == "LONG":
-                outcome = position_size * (exit_price - entry_price)
-            else:
-                outcome = position_size * (entry_price - exit_price)
-            if outcome > 0:
-                wins += 1
-            else:
-                losses += 1
+            raw_exit_price = float(df_feat["close"].iloc[exit_bar])
 
-        # FIX: Record trade exit bar so we don't open overlapping trades
+        actual_exit_price = raw_exit_price * (1.0 - SLIPPAGE_RATE) if side == "LONG" else raw_exit_price * (1.0 + SLIPPAGE_RATE)
+        outcome = position_size * (actual_exit_price - entry_price) if side == "LONG" else position_size * (entry_price - actual_exit_price)
+
+        # Record trade exit bar so we don't open overlapping trades
         trade_exit_bar = exit_bar
 
-        # 7. Apply realistic fees (entry + exit)
-        notional = position_size * entry_price
-        total_fee = notional * (COMMISSION_RATE + SLIPPAGE_RATE) * 2  # Round trip
+        # 7. Apply realistic fees (entry notional + exit notional) and funding
+        exit_notional = position_size * actual_exit_price
+        total_fee = (notional + exit_notional) * COMMISSION_RATE + notional * funding_drag
         net_pnl = outcome - total_fee
+        if net_pnl > 0:
+            wins += 1
+        else:
+            losses += 1
 
         balance += net_pnl
         trade_pnls.append(net_pnl)

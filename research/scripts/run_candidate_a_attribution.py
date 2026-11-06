@@ -124,16 +124,17 @@ def compute_slice_metrics(trade_records: list) -> dict:
     }
 
 
-def main():
+def main(symbol: str = "ETHUSDT", include_holdout: bool = False):
     print("=" * 70)
-    print("CANDIDATE A (Exp1_Momentum_Continuation_4H) EDGE ATTRIBUTION ANALYSIS")
+    print(f"CANDIDATE A (Exp1_Momentum_Continuation_4H) EDGE ATTRIBUTION ANALYSIS ({symbol})")
     print("=" * 70)
 
     # 1. Load Data
+    base_asset = symbol.lower().replace("usdt", "").replace("/", "").replace(":", "").strip("_") or "eth"
     cache_dir = os.path.join(BASE_DIR, "data", "cache")
-    eth_path = os.path.join(cache_dir, "eth_usdt_1h_3yr.parquet")
+    eth_path = os.path.join(cache_dir, f"{base_asset}_usdt_1h_3yr.parquet")
     btc_path = os.path.join(cache_dir, "btc_usdt_1h_3yr.parquet")
-    funding_path = os.path.join(cache_dir, "eth_funding_3yr.parquet")
+    funding_path = os.path.join(cache_dir, f"{base_asset}_funding_3yr.parquet")
 
     df_eth_1h = pd.read_parquet(eth_path)
     df_btc_1h = pd.read_parquet(btc_path)
@@ -227,229 +228,221 @@ def main():
     # 3. Load Phase 2.1 Walk-Forward Trades for Candidate A
     trade_log_path = os.path.join(BASE_DIR, "research", "phase_2_1_fold_trade_log.csv")
     df_trades_all = pd.read_csv(trade_log_path)
-    df_trades = df_trades_all[df_trades_all["strategy"] == "Exp1_Momentum_Continuation_4H"].copy()
-    print(f"Loaded {len(df_trades)} Walk-Forward Trades for Exp1_Momentum_Continuation_4H")
+    df_cand_a_all = df_trades_all[df_trades_all["strategy"] == "Exp1_Momentum_Continuation_4H"].copy()
+    if not include_holdout and "fold" in df_cand_a_all.columns:
+        df_trades = df_cand_a_all[df_cand_a_all["fold"].isin([1, 2, 3, 4])].copy()
+        df_trades_holdout = df_cand_a_all[df_cand_a_all["fold"] == 5].copy()
+    else:
+        df_trades = df_cand_a_all.copy()
+        df_trades_holdout = pd.DataFrame()
+    print(f"Loaded {len(df_trades)} Walk-Forward Trades for Exp1_Momentum_Continuation_4H (include_holdout={include_holdout})")
 
     # 4. Enrich Each Trade with Causal Entry Features and Intratrade Path Trajectory
-    attributed_trades = []
+    def _enrich_trades(df_subset: pd.DataFrame) -> list:
+        out_records = []
+        for _, row in df_subset.iterrows():
+            t_id = row["trade_id"]
+            fold = row["fold"]
+            dec_t = pd.to_datetime(row["decision_time"])
+            entry_t = pd.to_datetime(row["entry_time"])
+            exit_t = pd.to_datetime(row["exit_time"])
+            side = row["side"].upper()
+            entry_px = float(row["entry_price"])
+            exit_px = float(row["exit_price"])
+            stop_px = float(row["stop_price"])
+            holding_bars = int(row["holding_bars"])
+            exit_reason = row["exit_reason"]
+            net_ret = float(row["net_return"])
+            trade_pnl = float(row["trade_pnl_usd"])
 
-    for _, row in df_trades.iterrows():
-        t_id = row["trade_id"]
-        fold = row["fold"]
-        dec_t = pd.to_datetime(row["decision_time"])
-        entry_t = pd.to_datetime(row["entry_time"])
-        exit_t = pd.to_datetime(row["exit_time"])
-        side = row["side"].upper()
-        entry_px = float(row["entry_price"])
-        exit_px = float(row["exit_price"])
-        stop_px = float(row["stop_price"])
-        holding_bars = int(row["holding_bars"])
-        exit_reason = row["exit_reason"]
-        net_ret = float(row["net_return"])
-        trade_pnl = float(row["trade_pnl_usd"])
+            cand_4h = df_eth_4h[df_eth_4h.index <= dec_t]
+            last_4h_idx = cand_4h.index[-1] if len(cand_4h) > 0 else None
 
-        # Locate decision bar in 4H dataframe
-        # Decision time corresponds to the close of that 4H candle (i.e. timestamp = dec_t - 4h if left-labeled)
-        # Check matching 4H row
-        cand_4h = df_eth_4h[df_eth_4h.index <= dec_t]
-        last_4h_idx = cand_4h.index[-1] if len(cand_4h) > 0 else None
-        
-        regime_val = int(cand_4h.loc[last_4h_idx, "regime"]) if last_4h_idx is not None else 0
-        adx_val = float(cand_4h.loc[last_4h_idx, "adx_14"]) if last_4h_idx is not None else 0.0
-        vol_ratio_val = float(cand_4h.loc[last_4h_idx, "vol_ratio"]) if last_4h_idx is not None else 1.0
+            regime_val = int(cand_4h.loc[last_4h_idx, "regime"]) if last_4h_idx is not None else 0
+            adx_val = float(cand_4h.loc[last_4h_idx, "adx_14"]) if last_4h_idx is not None else 0.0
+            vol_ratio_val = float(cand_4h.loc[last_4h_idx, "vol_ratio"]) if last_4h_idx is not None else 1.0
 
-        # BTC Trend at decision time
-        cand_btc_4h = df_btc_4h[df_btc_4h.index <= dec_t]
-        last_b_idx = cand_btc_4h.index[-1] if len(cand_btc_4h) > 0 else None
-        btc_close = float(cand_btc_4h.loc[last_b_idx, "close"]) if last_b_idx is not None else 0.0
-        btc_ema50 = float(cand_btc_4h.loc[last_b_idx, "ema_50"]) if last_b_idx is not None else 0.0
-        btc_adx = float(cand_btc_4h.loc[last_b_idx, "adx_14"]) if last_b_idx is not None else 0.0
+            cand_btc_4h = df_btc_4h[df_btc_4h.index <= dec_t]
+            last_b_idx = cand_btc_4h.index[-1] if len(cand_btc_4h) > 0 else None
+            btc_close = float(cand_btc_4h.loc[last_b_idx, "close"]) if last_b_idx is not None else 0.0
+            btc_ema50 = float(cand_btc_4h.loc[last_b_idx, "ema_50"]) if last_b_idx is not None else 0.0
+            btc_adx = float(cand_btc_4h.loc[last_b_idx, "adx_14"]) if last_b_idx is not None else 0.0
 
-        btc_trend_bullish = btc_close > btc_ema50
-        btc_trend_bearish = btc_close < btc_ema50
-        btc_trending = btc_adx >= 20.0
+            btc_trend_bullish = btc_close > btc_ema50
+            btc_trend_bearish = btc_close < btc_ema50
+            btc_trending = btc_adx >= 20.0
 
-        btc_trend_status = (
-            "BULLISH_TRENDING" if (btc_trend_bullish and btc_trending) else
-            "BULLISH_RANGING" if btc_trend_bullish else
-            "BEARISH_TRENDING" if (btc_trend_bearish and btc_trending) else
-            "BEARISH_RANGING"
-        )
-        btc_trend_aligned = (
-            (side == "LONG" and btc_trend_bullish) or
-            (side == "SHORT" and btc_trend_bearish)
-        )
+            btc_trend_status = (
+                "BULLISH_TRENDING" if (btc_trend_bullish and btc_trending) else
+                "BULLISH_RANGING" if btc_trend_bullish else
+                "BEARISH_TRENDING" if (btc_trend_bearish and btc_trending) else
+                "BEARISH_RANGING"
+            )
+            btc_trend_aligned = (
+                (side == "LONG" and btc_trend_bullish) or
+                (side == "SHORT" and btc_trend_bearish)
+            )
 
-        # ETH Relative Strength against BTC over preceding 24h
-        cand_eth_1h = df_eth_1h[df_eth_1h.index <= entry_t]
-        cand_b_1h = df_btc_1h[df_btc_1h.index <= entry_t]
-        eth_ret_24h = float(cand_eth_1h.iloc[-1]["ret_24h"]) if len(cand_eth_1h) > 0 else 0.0
-        btc_ret_24h = float(cand_b_1h.iloc[-1]["ret_24h"]) if len(cand_b_1h) > 0 else 0.0
-        rs_24h = (eth_ret_24h - btc_ret_24h) * 100.0  # in percentage points
-        rs_status = "ETH_OUTPERFORMING" if rs_24h > 0 else "ETH_UNDERPERFORMING"
+            cand_eth_1h = df_eth_1h[df_eth_1h.index <= entry_t]
+            cand_b_1h = df_btc_1h[df_btc_1h.index <= entry_t]
+            eth_ret_24h = float(cand_eth_1h.iloc[-1]["ret_24h"]) if len(cand_eth_1h) > 0 else 0.0
+            btc_ret_24h = float(cand_b_1h.iloc[-1]["ret_24h"]) if len(cand_b_1h) > 0 else 0.0
+            rs_24h = (eth_ret_24h - btc_ret_24h) * 100.0
+            rs_status = "ETH_OUTPERFORMING" if rs_24h > 0 else "ETH_UNDERPERFORMING"
 
-        # Funding rate condition at entry
-        cand_f = df_funding_1h[df_funding_1h.index <= entry_t]
-        entry_funding_rate = float(cand_f.iloc[-1]["fundingRate"]) if len(cand_f) > 0 and "fundingRate" in cand_f.columns else 0.0
-        if entry_funding_rate > 0.0001:  # > +0.01%
-            funding_condition = "POSITIVE_HIGH"
-        elif entry_funding_rate > 0.00003: # > +0.003%
-            funding_condition = "POSITIVE_MILD"
-        elif entry_funding_rate < -0.00003:
-            funding_condition = "NEGATIVE"
-        else:
-            funding_condition = "NEUTRAL"
-
-        # Intratrade Hourly Path Analysis
-        bars_held = df_eth_1h[(df_eth_1h.index >= entry_t) & (df_eth_1h.index <= exit_t)]
-        n_held = len(bars_held)
-
-        pnl_1h = pnl_2h = pnl_4h = pnl_8h = pnl_12h = 0.0
-        mfe_val = 0.0
-        mae_val = 0.0
-
-        if n_held > 0:
-            highs = bars_held["high"].values
-            lows = bars_held["low"].values
-            closes = bars_held["close"].values
-
-            if side == "LONG":
-                mfe_val = float(np.max(highs) - entry_px) / entry_px
-                mae_val = float(entry_px - np.min(lows)) / entry_px
-                # Path returns at specific bar offsets
-                pnl_1h = (closes[min(0, n_held - 1)] - entry_px) / entry_px
-                pnl_2h = (closes[min(1, n_held - 1)] - entry_px) / entry_px
-                pnl_4h = (closes[min(3, n_held - 1)] - entry_px) / entry_px
-                pnl_8h = (closes[min(7, n_held - 1)] - entry_px) / entry_px
-                pnl_12h = (closes[min(11, n_held - 1)] - entry_px) / entry_px
+            cand_f = df_funding_1h[df_funding_1h.index <= entry_t]
+            entry_funding_rate = float(cand_f.iloc[-1]["fundingRate"]) if len(cand_f) > 0 and "fundingRate" in cand_f.columns else 0.0
+            if entry_funding_rate > 0.0001:
+                funding_condition = "POSITIVE_HIGH"
+            elif entry_funding_rate > 0.00003:
+                funding_condition = "POSITIVE_MILD"
+            elif entry_funding_rate < -0.00003:
+                funding_condition = "NEGATIVE"
             else:
-                mfe_val = float(entry_px - np.min(lows)) / entry_px
-                mae_val = float(np.max(highs) - entry_px) / entry_px
-                pnl_1h = (entry_px - closes[min(0, n_held - 1)]) / entry_px
-                pnl_2h = (entry_px - closes[min(1, n_held - 1)]) / entry_px
-                pnl_4h = (entry_px - closes[min(3, n_held - 1)]) / entry_px
-                pnl_8h = (entry_px - closes[min(7, n_held - 1)]) / entry_px
-                pnl_12h = (entry_px - closes[min(11, n_held - 1)]) / entry_px
+                funding_condition = "NEUTRAL"
 
-        surrendered = max(0.0, mfe_val - net_ret)
-        first_12h_status = "POSITIVE_AT_12H" if pnl_12h > 0 else "NEGATIVE_AT_12H"
+            bars_held = df_eth_1h[(df_eth_1h.index >= entry_t) & (df_eth_1h.index <= exit_t)]
+            n_held = len(bars_held)
 
-        # Categorize relative volume
-        if vol_ratio_val >= 2.5:
-            vol_tier = "EXTREME_VOL (>2.5x)"
-        elif vol_ratio_val >= 1.8:
-            vol_tier = "HIGH_VOL (1.8-2.5x)"
-        elif vol_ratio_val >= 1.4:
-            vol_tier = "MODERATE_VOL (1.4-1.8x)"
-        else:
-            vol_tier = "BASELINE_VOL (<1.4x)"
+            pnl_1h = pnl_2h = pnl_4h = pnl_8h = pnl_12h = 0.0
+            mfe_val = 0.0
+            mae_val = 0.0
 
-        # Regime name
-        regime_names = {
-            1: "Regime 1: Compression",
-            2: "Regime 2: Expansion",
-            3: "Regime 3: Strong Trend",
-            5: "Regime 5: Chop/Sideways"
+            if n_held > 0:
+                highs = bars_held["high"].values
+                lows = bars_held["low"].values
+                closes = bars_held["close"].values
+
+                if side == "LONG":
+                    mfe_val = float(np.max(highs) - entry_px) / entry_px
+                    mae_val = float(entry_px - np.min(lows)) / entry_px
+                    pnl_1h = (closes[min(0, n_held - 1)] - entry_px) / entry_px
+                    pnl_2h = (closes[min(1, n_held - 1)] - entry_px) / entry_px
+                    pnl_4h = (closes[min(3, n_held - 1)] - entry_px) / entry_px
+                    pnl_8h = (closes[min(7, n_held - 1)] - entry_px) / entry_px
+                    pnl_12h = (closes[min(11, n_held - 1)] - entry_px) / entry_px
+                else:
+                    mfe_val = float(entry_px - np.min(lows)) / entry_px
+                    mae_val = float(np.max(highs) - entry_px) / entry_px
+                    pnl_1h = (entry_px - closes[min(0, n_held - 1)]) / entry_px
+                    pnl_2h = (entry_px - closes[min(1, n_held - 1)]) / entry_px
+                    pnl_4h = (entry_px - closes[min(3, n_held - 1)]) / entry_px
+                    pnl_8h = (entry_px - closes[min(7, n_held - 1)]) / entry_px
+                    pnl_12h = (entry_px - closes[min(11, n_held - 1)]) / entry_px
+
+            surrendered = max(0.0, mfe_val - net_ret)
+            first_12h_status = "POSITIVE_AT_12H" if pnl_12h > 0 else "NEGATIVE_AT_12H"
+
+            if vol_ratio_val >= 2.5:
+                vol_tier = "EXTREME_VOL (>2.5x)"
+            elif vol_ratio_val >= 1.8:
+                vol_tier = "HIGH_VOL (1.8-2.5x)"
+            elif vol_ratio_val >= 1.4:
+                vol_tier = "MODERATE_VOL (1.4-1.8x)"
+            else:
+                vol_tier = "BASELINE_VOL (<1.4x)"
+
+            regime_names = {
+                1: "Regime 1: Compression",
+                2: "Regime 2: Expansion",
+                3: "Regime 3: Strong Trend",
+                5: "Regime 5: Chop/Sideways"
+            }
+            regime_label = regime_names.get(regime_val, f"Regime {regime_val}")
+
+            out_records.append({
+                "trade_id": t_id,
+                "fold": fold,
+                "side": side,
+                "decision_time": str(dec_t),
+                "entry_time": str(entry_t),
+                "exit_time": str(exit_t),
+                "holding_bars": holding_bars,
+                "exit_reason": exit_reason,
+                "net_return": net_ret,
+                "net_return_pct": round(net_ret * 100.0, 3),
+                "trade_pnl_usd": round(trade_pnl, 2),
+                "mfe": round(mfe_val, 4),
+                "mae": round(mae_val, 4),
+                "surrendered_profit": round(surrendered, 4),
+                "regime": regime_label,
+                "adx_4h": round(adx_val, 1),
+                "vol_ratio": round(vol_ratio_val, 2),
+                "vol_tier": vol_tier,
+                "btc_trend_status": btc_trend_status,
+                "btc_trend_aligned": btc_trend_aligned,
+                "rs_24h_pct": round(rs_24h, 2),
+                "rs_status": rs_status,
+                "funding_rate": round(entry_funding_rate, 6),
+                "funding_condition": funding_condition,
+                "pnl_1h_pct": round(pnl_1h * 100.0, 3),
+                "pnl_2h_pct": round(pnl_2h * 100.0, 3),
+                "pnl_4h_pct": round(pnl_4h * 100.0, 3),
+                "pnl_8h_pct": round(pnl_8h * 100.0, 3),
+                "pnl_12h_pct": round(pnl_12h * 100.0, 3),
+                "first_12h_status": first_12h_status
+            })
+        return out_records
+
+    def _compute_all_slices(records: list) -> dict:
+        s_out = {}
+        s_out["side"] = {
+            "LONG": compute_slice_metrics([t for t in records if t["side"] == "LONG"]),
+            "SHORT": compute_slice_metrics([t for t in records if t["side"] == "SHORT"])
         }
-        regime_label = regime_names.get(regime_val, f"Regime {regime_val}")
-
-        record = {
-            "trade_id": t_id,
-            "fold": fold,
-            "side": side,
-            "decision_time": str(dec_t),
-            "entry_time": str(entry_t),
-            "exit_time": str(exit_t),
-            "holding_bars": holding_bars,
-            "exit_reason": exit_reason,
-            "net_return": net_ret,
-            "net_return_pct": round(net_ret * 100.0, 3),
-            "trade_pnl_usd": round(trade_pnl, 2),
-            "mfe": round(mfe_val, 4),
-            "mae": round(mae_val, 4),
-            "surrendered_profit": round(surrendered, 4),
-            "regime": regime_label,
-            "adx_4h": round(adx_val, 1),
-            "vol_ratio": round(vol_ratio_val, 2),
-            "vol_tier": vol_tier,
-            "btc_trend_status": btc_trend_status,
-            "btc_trend_aligned": btc_trend_aligned,
-            "rs_24h_pct": round(rs_24h, 2),
-            "rs_status": rs_status,
-            "funding_rate": round(entry_funding_rate, 6),
-            "funding_condition": funding_condition,
-            "pnl_1h_pct": round(pnl_1h * 100.0, 3),
-            "pnl_2h_pct": round(pnl_2h * 100.0, 3),
-            "pnl_4h_pct": round(pnl_4h * 100.0, 3),
-            "pnl_8h_pct": round(pnl_8h * 100.0, 3),
-            "pnl_12h_pct": round(pnl_12h * 100.0, 3),
-            "first_12h_status": first_12h_status
+        reg_keys = sorted(list(set(t["regime"] for t in records)))
+        s_out["regime"] = {
+            rk: compute_slice_metrics([t for t in records if t["regime"] == rk])
+            for rk in reg_keys
         }
-        attributed_trades.append(record)
+        vt_keys = ["EXTREME_VOL (>2.5x)", "HIGH_VOL (1.8-2.5x)", "MODERATE_VOL (1.4-1.8x)", "BASELINE_VOL (<1.4x)"]
+        s_out["volume_tier"] = {
+            vk: compute_slice_metrics([t for t in records if t["vol_tier"] == vk])
+            for vk in vt_keys if any(t["vol_tier"] == vk for t in records)
+        }
+        s_out["btc_trend_alignment"] = {
+            "ALIGNED_WITH_BTC": compute_slice_metrics([t for t in records if t["btc_trend_aligned"]]),
+            "COUNTER_BTC_TREND": compute_slice_metrics([t for t in records if not t["btc_trend_aligned"]])
+        }
+        s_out["eth_relative_strength"] = {
+            "ETH_OUTPERFORMING_BTC": compute_slice_metrics([t for t in records if t["rs_status"] == "ETH_OUTPERFORMING"]),
+            "ETH_UNDERPERFORMING_BTC": compute_slice_metrics([t for t in records if t["rs_status"] == "ETH_UNDERPERFORMING"])
+        }
+        fund_keys = ["POSITIVE_HIGH", "POSITIVE_MILD", "NEUTRAL", "NEGATIVE"]
+        s_out["funding_condition"] = {
+            fk: compute_slice_metrics([t for t in records if t["funding_condition"] == fk])
+            for fk in fund_keys if any(t["funding_condition"] == fk for t in records)
+        }
+        exit_keys = sorted(list(set(t["exit_reason"] for t in records)))
+        s_out["exit_reason"] = {
+            ek: compute_slice_metrics([t for t in records if t["exit_reason"] == ek])
+            for ek in exit_keys
+        }
+        s_out["first_12h_trajectory"] = {
+            "POSITIVE_AT_12H": compute_slice_metrics([t for t in records if t["first_12h_status"] == "POSITIVE_AT_12H"]),
+            "NEGATIVE_AT_12H": compute_slice_metrics([t for t in records if t["first_12h_status"] == "NEGATIVE_AT_12H"])
+        }
+        s_out["overall_pooled"] = compute_slice_metrics(records)
+        return s_out
 
-    # Convert to DataFrame
+    attributed_trades = _enrich_trades(df_trades)
+    holdout_attributed_trades = _enrich_trades(df_trades_holdout) if len(df_trades_holdout) > 0 else []
+
+    # Convert to DataFrame (OOS section with include_holdout=False)
     df_attr = pd.DataFrame(attributed_trades)
     csv_out = os.path.join(BASE_DIR, "research", "candidate_a_trade_attribution.csv")
     df_attr.to_csv(csv_out, index=False)
     print(f"Saved trade attribution CSV: {csv_out}")
 
     # 5. Compute Quantitative Slices
-    slices = {}
-
-    # Slice 1: Long vs Short
-    slices["side"] = {
-        "LONG": compute_slice_metrics([t for t in attributed_trades if t["side"] == "LONG"]),
-        "SHORT": compute_slice_metrics([t for t in attributed_trades if t["side"] == "SHORT"])
-    }
-
-    # Slice 2: Market Regime
-    reg_keys = sorted(list(set(t["regime"] for t in attributed_trades)))
-    slices["regime"] = {
-        rk: compute_slice_metrics([t for t in attributed_trades if t["regime"] == rk])
-        for rk in reg_keys
-    }
-
-    # Slice 3: Relative Volume Tiers
-    vt_keys = ["EXTREME_VOL (>2.5x)", "HIGH_VOL (1.8-2.5x)", "MODERATE_VOL (1.4-1.8x)", "BASELINE_VOL (<1.4x)"]
-    slices["volume_tier"] = {
-        vk: compute_slice_metrics([t for t in attributed_trades if t["vol_tier"] == vk])
-        for vk in vt_keys if any(t["vol_tier"] == vk for t in attributed_trades)
-    }
-
-    # Slice 4: BTC Trend Alignment
-    slices["btc_trend_alignment"] = {
-        "ALIGNED_WITH_BTC": compute_slice_metrics([t for t in attributed_trades if t["btc_trend_aligned"]]),
-        "COUNTER_BTC_TREND": compute_slice_metrics([t for t in attributed_trades if not t["btc_trend_aligned"]])
-    }
-
-    # Slice 5: ETH Relative Strength against BTC
-    slices["eth_relative_strength"] = {
-        "ETH_OUTPERFORMING_BTC": compute_slice_metrics([t for t in attributed_trades if t["rs_status"] == "ETH_OUTPERFORMING"]),
-        "ETH_UNDERPERFORMING_BTC": compute_slice_metrics([t for t in attributed_trades if t["rs_status"] == "ETH_UNDERPERFORMING"])
-    }
-
-    # Slice 6: Funding Rate Condition
-    fund_keys = ["POSITIVE_HIGH", "POSITIVE_MILD", "NEUTRAL", "NEGATIVE"]
-    slices["funding_condition"] = {
-        fk: compute_slice_metrics([t for t in attributed_trades if t["funding_condition"] == fk])
-        for fk in fund_keys if any(t["funding_condition"] == fk for t in attributed_trades)
-    }
-
-    # Slice 7: Exit Reason
-    exit_keys = sorted(list(set(t["exit_reason"] for t in attributed_trades)))
-    slices["exit_reason"] = {
-        ek: compute_slice_metrics([t for t in attributed_trades if t["exit_reason"] == ek])
-        for ek in exit_keys
-    }
-
-    # Slice 8: First 12-Hour Trajectory
-    slices["first_12h_trajectory"] = {
-        "POSITIVE_AT_12H": compute_slice_metrics([t for t in attributed_trades if t["first_12h_status"] == "POSITIVE_AT_12H"]),
-        "NEGATIVE_AT_12H": compute_slice_metrics([t for t in attributed_trades if t["first_12h_status"] == "NEGATIVE_AT_12H"])
-    }
-
-    # Overall Baseline
-    slices["overall_pooled"] = compute_slice_metrics(attributed_trades)
+    slices = _compute_all_slices(attributed_trades)
+    if holdout_attributed_trades:
+        holdout_slices = _compute_all_slices(holdout_attributed_trades)
+        slices["holdout_fold_5_already_used_not_untouched"] = {
+            "label": "HOLDOUT ALREADY USED, NOT UNTOUCHED",
+            "folds": [5],
+            **holdout_slices,
+        }
 
     # Save to JSON
     json_out = os.path.join(BASE_DIR, "research", "candidate_a_attribution.json")
