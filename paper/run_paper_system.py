@@ -434,23 +434,31 @@ async def run_full_system():
             if quotes:
                 exec_engine.update_mark_to_market(quotes)
 
+            # Query verified Binance server time via REST endpoint
+            verified_server_time = collector.get_server_time()
+            if verified_server_time is None:
+                runner.data_integrity_unverified = True
+                logger.warning("Binance server time unverified: blocking new entries while keeping live quote protection active.")
+            else:
+                runner.data_integrity_unverified = False
+
             # 1. Replay missed completed 1m candles chronologically to ensure open positions receive every eligible bar
             gap_occurred = False
             try:
-                runner.replay_missed_completed_1m_bars(quotes)
+                runner.replay_missed_completed_1m_bars(quotes, server_time=verified_server_time)
             except CandleGapError as e:
                 logger.critical(f"Candle gap detected during 1m replay: {e}. Halting new entries and skipping strategy evaluation until recovered.")
                 gap_occurred = True
 
-            # Issue 3: Protect existing positions using fresh live quotes EVEN during data gaps
+            # Protect existing positions using fresh live quotes EVEN during data gaps
             # Never pass stale candles (current_bar=None enforces live quote protection)
             try:
                 runner.process_incoming_market_tick(quotes, current_bar=None)
             except Exception as e:
                 logger.error(f"Error managing existing positions with live quotes: {e}")
 
-            # 2. Evaluate strategy on completed, 240-bar-verified 4H candles (only if continuity intact and not halted)
-            if not gap_occurred and not runner.gap_halted:
+            # 2. Evaluate strategy on completed, 240-bar-verified 4H candles (only if continuity intact, not halted, and integrity verified)
+            if not gap_occurred and not runner.gap_halted and not getattr(runner, "data_integrity_unverified", False):
                 try:
                     runner.evaluate_new_completed_candles(quotes)
                 except Exception as e:

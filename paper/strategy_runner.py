@@ -86,6 +86,7 @@ class CandidateAPaperRunner:
         self.last_processed_1m_open_time: Dict[str, int] = {}
         self.flagged_gap_periods: List[Dict[str, Any]] = []
         self.gap_halted: bool = False
+        self.data_integrity_unverified: bool = False
 
         self._init_runner_tables()
         self._load_processed_1m_open_times()
@@ -538,15 +539,25 @@ class CandidateAPaperRunner:
             if trigger:
                 reason, gap_px = trigger
                 candle_exit_time = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc).isoformat() if b_close_time else now_str
-                self.exec_engine.close_position(
+                processed_candle_info = {
+                    "strategy_id": self.strategy_id,
+                    "symbol": self.symbol,
+                    "open_time": int(bar_ot),
+                    "close_time": int(b_close_time),
+                    "processed_at": now_str
+                } if (bar_ot is not None and b_close_time is not None) else None
+                close_res = self.exec_engine.close_position(
                     strategy_id=self.strategy_id,
                     symbol=self.symbol,
                     exit_reason=reason,
                     quote=None,
                     adverse_gap_price=gap_px,
                     candle_price=b_close,
-                    exit_time_str=candle_exit_time
+                    exit_time_str=candle_exit_time,
+                    processed_candle_info=processed_candle_info
                 )
+                if close_res and bar_ot is not None:
+                    self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
                 position_closed = True
             elif pos:
                 # Check horizon expiry against current bar
@@ -557,22 +568,31 @@ class CandidateAPaperRunner:
                         hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
                         if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
                             candle_exit_time = bar_dt.isoformat()
-                            self.exec_engine.close_position(
+                            processed_candle_info = {
+                                "strategy_id": self.strategy_id,
+                                "symbol": self.symbol,
+                                "open_time": int(bar_ot),
+                                "close_time": int(b_close_time),
+                                "processed_at": now_str
+                            } if (bar_ot is not None and b_close_time is not None) else None
+                            close_res = self.exec_engine.close_position(
                                 strategy_id=self.strategy_id,
                                 symbol=self.symbol,
                                 exit_reason="horizon_expiry",
                                 quote=None,
                                 candle_price=b_close,
-                                exit_time_str=candle_exit_time
+                                exit_time_str=candle_exit_time,
+                                processed_candle_info=processed_candle_info
                             )
+                            if close_res and bar_ot is not None:
+                                self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
                             position_closed = True
                 except Exception as e:
                     logger.error(f"Error checking horizon expiry on bar: {e}")
                     raise
 
-            # Issue 2: Atomic Candle Processing
-            # Persist processed candle to SQLite ONLY AFTER all position-management effects and DB commits have succeeded!
-            if bar_ot is not None and b_close_time is not None:
+            # Section C: If candle did not close a position, persist processed candle in a single transaction
+            if not position_closed and bar_ot is not None and b_close_time is not None:
                 with self._get_connection() as conn:
                     conn.execute("""
                     INSERT OR IGNORE INTO processed_1m_candles (
@@ -643,7 +663,11 @@ class CandidateAPaperRunner:
             except Exception as e:
                 logger.error(f"Error checking live quote triggers: {e}")
 
-    def replay_missed_completed_1m_bars(self, quotes: Dict[str, Dict[str, Any]]) -> int:
+    def replay_missed_completed_1m_bars(
+        self,
+        quotes: Dict[str, Dict[str, Any]],
+        server_time: Optional[int] = None
+    ) -> int:
         """
         Replays missed completed 1m bars from completed_klines in chronological order (ASC).
         Ensures open positions receive every eligible missed bar after restart.
@@ -673,7 +697,10 @@ class CandidateAPaperRunner:
         # Determine exchange-adjusted reference timestamp strictly for self.symbol (no cross-symbol leakage)
         exchange_now = None
         has_server_time = False
-        if isinstance(quotes, dict):
+        if server_time is not None:
+            exchange_now = int(server_time)
+            has_server_time = True
+        elif isinstance(quotes, dict):
             q = quotes.get(self.symbol, {})
             if isinstance(q, dict):
                 if q.get("server_time"):
@@ -845,9 +872,10 @@ class CandidateAPaperRunner:
         Evaluates Candidate A on all newly completed, 240-bar-verified 4H candles.
         Processes missed candles sequentially upon restart and guarantees no duplicates.
         """
-        if self.gap_halted:
+        if self.gap_halted or getattr(self, "data_integrity_unverified", False):
             logger.warning(
-                f"Candidate A strategy evaluation halted for {self.symbol} due to active candle gap. All new entries blocked."
+                f"Candidate A strategy evaluation halted for {self.symbol} due to "
+                f"active candle gap or unverified server time. All new entries blocked."
             )
             return 0
 

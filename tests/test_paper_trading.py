@@ -2663,6 +2663,388 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         # Migrated equity: 8998.50 + 1000 + 50 = 10048.50
         self.assertAlmostEqual(mig_engine.portfolio["equity"], 10048.50, places=2)
 
+    # -------------------------------------------------------------------------
+    # Workflow 1: Complete Position Lifecycle & Restart Reconciliation (Section H)
+    # -------------------------------------------------------------------------
+    def test_49_workflow_1_position_lifecycle_e2e_restart_reconciliation(self):
+        """Workflow 1: Open -> Mark-to-market -> Funding settlement -> Live Exit -> Close -> Restart."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=10000.0)
+        now_ms = int(time.time() * 1000)
+        entry_quote = {"best_bid": 3000.0, "best_ask": 3000.0, "mid_price": 3000.0, "receipt_ts": now_ms}
+        t0_iso = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
+
+        # 1. Open Position
+        pos = engine.open_position("Strat_W1", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, entry_quote, entry_time_str=t0_iso)
+        self.assertIsNotNone(pos)
+        pos_id = pos["position_id"]
+        entry_price = pos["entry_price"]
+
+        # 2. Mark-to-Market
+        mtm_quote = {"best_bid": 3050.0, "best_ask": 3050.0, "mid_price": 3050.0, "receipt_ts": now_ms + 1000}
+        engine.update_mark_to_market({"ETHUSDT": mtm_quote})
+        expected_unrealized = (3050.0 - entry_price) * 1.0
+        self.assertAlmostEqual(engine.portfolio["unrealized_pnl"], expected_unrealized, places=2)
+        self.assertAlmostEqual(engine.portfolio["equity"], engine.portfolio["cash_balance"] + engine.portfolio["margin_used"] + expected_unrealized, places=2)
+
+        # Verify mark state persisted in DB
+        with sqlite3.connect(self.paper_db) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT current_price FROM paper_positions WHERE position_id = ?", (pos_id,))
+            self.assertAlmostEqual(float(cur.fetchone()[0]), 3050.0, places=2)
+
+        # 3. Funding Settlement
+        sett_time = now_ms + 2000
+        with sqlite3.connect(self.market_db) as conn:
+            conn.execute("""
+            INSERT INTO funding_settlements (symbol, settlement_time, funding_rate, mark_price)
+            VALUES (?, ?, ?, ?);
+            """, ("ETHUSDT", sett_time, 0.0001, 3050.0))
+        applied_count = engine.apply_settled_funding_rates()
+        self.assertEqual(applied_count, 1)
+        expected_funding = -1.0 * 1.0 * 3050.0 * 0.0001
+        self.assertAlmostEqual(pos["accumulated_funding"], expected_funding, places=2)
+
+        # 4. Live Exit (Price drops past stop loss to 2890.0)
+        exit_quote = {"best_bid": 2890.0, "best_ask": 2890.0, "receipt_ts": now_ms + 3000}
+        trade = engine.close_position("Strat_W1", "ETHUSDT", "stop_loss", quote=exit_quote)
+        self.assertIsNotNone(trade)
+        expected_fill = engine.quantize_price("ETHUSDT", 2890.0 * (1.0 - engine.slippage_rate))
+        self.assertEqual(trade["exit_price"], expected_fill)
+        self.assertEqual(len(engine.active_positions), 0)
+
+        # 5. Verify Database Records
+        with sqlite3.connect(self.paper_db) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT status FROM paper_positions WHERE position_id = ?", (pos_id,))
+            self.assertEqual(cur.fetchone()[0], "CLOSED")
+            cur.execute("SELECT COUNT(*) FROM paper_trades WHERE strategy_id = 'Strat_W1'")
+            self.assertEqual(cur.fetchone()[0], 1)
+            cur.execute("SELECT COUNT(*) FROM paper_orders WHERE position_id = ?", (pos_id,))
+            self.assertEqual(cur.fetchone()[0], 2)
+
+        # 6. Idempotent Retry of Close
+        retry_res = engine.close_position("Strat_W1", "ETHUSDT", "stop_loss", quote=exit_quote)
+        self.assertIsNone(retry_res)
+        with sqlite3.connect(self.paper_db) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM paper_trades WHERE strategy_id = 'Strat_W1'")
+            self.assertEqual(cur.fetchone()[0], 1)
+
+        # 7. Restart Engine & Reconcile
+        engine_restarted = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertEqual(len(engine_restarted.active_positions), 0)
+        self.assertEqual(engine_restarted.portfolio["margin_used"], 0.0)
+        self.assertEqual(engine_restarted.portfolio["unrealized_pnl"], 0.0)
+        self.assertAlmostEqual(engine_restarted.portfolio["cash_balance"], engine.portfolio["cash_balance"], places=2)
+        self.assertAlmostEqual(engine_restarted.portfolio["equity"], engine.portfolio["equity"], places=2)
+        self.assertAlmostEqual(engine_restarted.portfolio["realized_pnl"], trade["net_pnl"], places=2)
+
+    # -------------------------------------------------------------------------
+    # Workflow 2: Multiple Positions MTM & Partial Close (Section H)
+    # -------------------------------------------------------------------------
+    def test_50_workflow_2_multi_position_mtm_partial_close_and_restart(self):
+        """Workflow 2: Open two positions, mark at different prices, close one, verify remaining retains unrealized PnL."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=20000.0)
+        now_ms = int(time.time() * 1000)
+        quote_eth = {"best_bid": 3000.0, "best_ask": 3000.0, "mid_price": 3000.0, "receipt_ts": now_ms}
+        t0_iso = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
+
+        # Open Position 1: Strat_A LONG 1.0 ETH
+        pos_a = engine.open_position("Strat_A", "ETHUSDT", "LONG", 1.0, 2800.0, 3200.0, quote_eth, entry_time_str=t0_iso)
+        # Open Position 2: Strat_B SHORT 1.0 ETH
+        pos_b = engine.open_position("Strat_B", "ETHUSDT", "SHORT", 1.0, 3200.0, 2800.0, quote_eth, entry_time_str=t0_iso)
+        self.assertEqual(len(engine.active_positions), 2)
+
+        # Mark-to-market at ETH = 3100.0
+        quote_higher = {"best_bid": 3100.0, "best_ask": 3100.0, "mid_price": 3100.0, "receipt_ts": now_ms + 1000}
+        engine.update_mark_to_market({"ETHUSDT": quote_higher})
+
+        expected_u_a = (3100.0 - pos_a["entry_price"]) * 1.0
+        expected_u_b = (pos_b["entry_price"] - 3100.0) * 1.0
+        self.assertAlmostEqual(engine.portfolio["unrealized_pnl"], expected_u_a + expected_u_b, places=2)
+
+        # Close Position 1 (Strat_A)
+        engine.close_position("Strat_A", "ETHUSDT", "manual_exit", quote=quote_higher)
+
+        # Position 2 (Strat_B) MUST remain active!
+        self.assertIn(("Strat_B", "ETHUSDT"), engine.active_positions)
+        self.assertEqual(len(engine.active_positions), 1)
+
+        # Unrealized PnL MUST NOT be reset to zero; it must reflect Position 2's unrealized PnL!
+        self.assertAlmostEqual(engine.portfolio["unrealized_pnl"], expected_u_b, places=2)
+        expected_equity = engine.portfolio["cash_balance"] + engine.portfolio["margin_used"] + expected_u_b
+        self.assertAlmostEqual(engine.portfolio["equity"], expected_equity, places=2)
+
+        # Restart Engine
+        engine_restarted = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=20000.0)
+        self.assertIn(("Strat_B", "ETHUSDT"), engine_restarted.active_positions)
+        self.assertEqual(len(engine_restarted.active_positions), 1)
+        self.assertAlmostEqual(engine_restarted.portfolio["unrealized_pnl"], expected_u_b, places=2)
+        self.assertAlmostEqual(engine_restarted.portfolio["equity"], expected_equity, places=2)
+
+    # -------------------------------------------------------------------------
+    # Workflow 3: Database Transactional Failure Injection at Boundaries (Section H)
+    # -------------------------------------------------------------------------
+    def test_51_workflow_3_transactional_failure_injection_at_boundaries(self):
+        """Workflow 3: Inject failures at database transaction boundaries and verify total rollback & consistency."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=20000.0)
+        now_ms = int(time.time() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+        initial_cash = engine.portfolio["cash_balance"]
+        initial_equity = engine.portfolio["equity"]
+
+        class InterceptingConn:
+            def __init__(self, real_conn, fail_pattern):
+                self._real = real_conn
+                self.fail_pattern = fail_pattern.lower()
+
+            def execute(self, sql, params=()):
+                if self.fail_pattern in sql.lower():
+                    raise sqlite3.OperationalError(f"Simulated boundary failure on: {self.fail_pattern}")
+                return self._real.execute(sql, params)
+
+            def commit(self):
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is not None:
+                    try:
+                        self._real.rollback()
+                    except Exception:
+                        pass
+                    return False
+                return self._real.__exit__(exc_type, exc_val, exc_tb)
+
+        orig_get_conn = engine._get_connection
+
+        # 1. Failure during Entry Order insertion
+        with unittest.mock.patch.object(engine, "_get_connection", side_effect=lambda: InterceptingConn(orig_get_conn(), "INSERT INTO paper_orders")):
+            with self.assertRaises(sqlite3.OperationalError):
+                engine.open_position("Strat_F1", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote)
+
+        self.assertEqual(engine.portfolio["cash_balance"], initial_cash)
+        self.assertEqual(engine.portfolio["margin_used"], 0.0)
+        self.assertEqual(len(engine.active_positions), 0)
+
+        # 2. Failure during Entry Portfolio Snapshot
+        with unittest.mock.patch.object(engine, "_get_connection", side_effect=lambda: InterceptingConn(orig_get_conn(), "INSERT INTO paper_portfolio")):
+            with self.assertRaises(sqlite3.OperationalError):
+                engine.open_position("Strat_F2", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote)
+
+        self.assertEqual(engine.portfolio["cash_balance"], initial_cash)
+        self.assertEqual(len(engine.active_positions), 0)
+
+        # 3. Successful entry for exit failure tests
+        pos = engine.open_position("Strat_F3", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote)
+        self.assertIsNotNone(pos)
+        post_open_cash = engine.portfolio["cash_balance"]
+        post_open_margin = engine.portfolio["margin_used"]
+
+        # 4. Failure during Exit Trade insertion
+        with unittest.mock.patch.object(engine, "_get_connection", side_effect=lambda: InterceptingConn(orig_get_conn(), "INSERT INTO paper_trades")):
+            with self.assertRaises(sqlite3.OperationalError):
+                engine.close_position("Strat_F3", "ETHUSDT", "manual_exit", quote=quote)
+
+        # In-memory and DB position MUST still be OPEN
+        self.assertEqual(engine.portfolio["cash_balance"], post_open_cash)
+        self.assertEqual(engine.portfolio["margin_used"], post_open_margin)
+        self.assertIn(("Strat_F3", "ETHUSDT"), engine.active_positions)
+
+        # 5. Failure during Exit Portfolio Snapshot
+        with unittest.mock.patch.object(engine, "_get_connection", side_effect=lambda: InterceptingConn(orig_get_conn(), "INSERT INTO paper_portfolio")):
+            with self.assertRaises(sqlite3.OperationalError):
+                engine.close_position("Strat_F3", "ETHUSDT", "manual_exit", quote=quote)
+
+        self.assertEqual(engine.portfolio["cash_balance"], post_open_cash)
+        self.assertIn(("Strat_F3", "ETHUSDT"), engine.active_positions)
+
+        # 6. Failure during Funding Settlement insertion
+        with sqlite3.connect(self.market_db) as m_conn:
+            m_conn.execute("""
+            INSERT INTO funding_settlements (symbol, settlement_time, funding_rate, mark_price)
+            VALUES (?, ?, ?, ?);
+            """, ("ETHUSDT", now_ms + 5000, 0.0001, 3000.0))
+
+        with unittest.mock.patch.object(engine, "_get_connection", side_effect=lambda: InterceptingConn(orig_get_conn(), "INSERT INTO position_funding_payments")):
+            with self.assertRaises(sqlite3.OperationalError):
+                engine.apply_settled_funding_rates()
+
+        self.assertEqual(engine.portfolio["cash_balance"], post_open_cash)
+        self.assertEqual(engine.active_positions[("Strat_F3", "ETHUSDT")]["accumulated_funding"], 0.0)
+
+        # Retry exit succeeds cleanly without duplicate records
+        trade_success = engine.close_position("Strat_F3", "ETHUSDT", "manual_exit", quote=quote)
+        self.assertIsNotNone(trade_success)
+        self.assertEqual(len(engine.active_positions), 0)
+
+    # -------------------------------------------------------------------------
+    # Workflow 4: Data Gaps Collector-to-Runner Integration (Section H)
+    # -------------------------------------------------------------------------
+    def test_52_workflow_4_data_gaps_collector_to_runner_integration(self):
+        """Workflow 4: Verify Binance server time detects missing trailing candles via collector-to-runner path."""
+        collector = MarketDataCollector(db_path=self.market_db)
+        runner = CandidateAPaperRunner(execution_engine=PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db), market_db_path=self.market_db, paper_db_path=self.paper_db, symbol="ETHUSDT")
+
+        base_ot = 1700000000000
+        # Insert 1 completed kline into market_db
+        with sqlite3.connect(self.market_db) as conn:
+            conn.execute("""
+            INSERT INTO completed_klines (
+                symbol, timeframe, open_time, close_time, open, high, low, close,
+                volume, quote_volume, taker_buy_volume, trades_count, receipt_ts, exchange_ts
+            ) VALUES (?, '1m', ?, ?, 3000.0, 3005.0, 2995.0, 3000.0, 10.0, 30000.0, 5.0, 100, ?, ?);
+            """, ("ETHUSDT", base_ot, base_ot + 59999, base_ot + 60000, base_ot + 60000))
+
+        now_ms = int(time.time() * 1000)
+        quotes = {"ETHUSDT": {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}}
+
+        # Replay initial bar
+        processed = runner.replay_missed_completed_1m_bars(quotes)
+        self.assertEqual(processed, 1)
+
+        # Simulate stalled stream: exchange server time is 3 minutes ahead but stream stalled
+        server_now = base_ot + 180000
+        with unittest.mock.patch.object(collector, "_http_get_json", return_value={"serverTime": server_now}):
+            verified_time = collector.get_server_time()
+            self.assertEqual(verified_time, server_now)
+
+        # Pass verified server time directly from collector to runner
+        with self.assertRaises(CandleGapError) as ctx:
+            runner.replay_missed_completed_1m_bars(quotes, server_time=verified_time)
+
+        err = ctx.exception
+        self.assertEqual(err.symbol, "ETHUSDT")
+        self.assertEqual(err.missing_bars, 2)
+        self.assertTrue(runner.gap_halted)
+
+        # New entries MUST be halted
+        eval_count = runner.evaluate_new_completed_candles(quotes)
+        self.assertEqual(eval_count, 0)
+
+        # Live quote protection MUST still function
+        runner.process_incoming_market_tick(quotes, current_bar=None)
+
+    # -------------------------------------------------------------------------
+    # Workflow 5: Migration Recovery & Idempotency (Section H)
+    # -------------------------------------------------------------------------
+    def test_53_workflow_5_migration_recovery_both_marker_paths_and_idempotency(self):
+        """Workflow 5: Test both migration marker paths, peak reconstruction from row margins, and repeated execution idempotency."""
+        mig_db = os.path.join(self.test_dir, "mig_test_53.db")
+        _init = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        del _init
+
+        conn = sqlite3.connect(mig_db)
+        conn.execute("DELETE FROM paper_schema_migrations;")
+        conn.execute("DELETE FROM paper_positions;")
+        conn.execute("DELETE FROM paper_portfolio;")
+
+        # Historical Row 1: Initial state
+        conn.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (1, '2024-01-01T10:00:00+00:00', 10000.0, 10000.0, 0.0, 0.0, 0.0, 10000.0, 0.0, 0.0, 0.0);
+        """)
+        # Open position with margin 1000
+        conn.execute("""
+        INSERT INTO paper_positions (position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage, stop_loss, take_profit, entry_time, status, accumulated_funding)
+        VALUES ('pos_53', 'Strat_53', 'ETHUSDT', 'LONG', 3000.0, 1.0, 3000.0, 1000.0, 0.3, 2900.0, 3200.0, '2024-01-01T11:00:00+00:00', 'OPEN', 0.0);
+        """)
+        # Historical Row 2: Peak occurred during position (unrealized PnL +500). In Phase 2.2B, equity was 11498.50, margin 1000
+        conn.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (2, '2024-01-01T11:30:00+00:00', 9998.50, 11498.50, 0.0, 500.0, 1000.0, 11498.50, 0.0, 0.3, 0.3);
+        """)
+        # Historical Row 3: Current state, unrealized dropped to +50
+        conn.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (3, '2024-01-01T12:00:00+00:00', 9998.50, 11048.50, 0.0, 50.0, 1000.0, 11498.50, 0.0, 0.3, 0.3);
+        """)
+        conn.commit()
+        conn.close()
+
+        # 1. Run Migration (Path 1: without marker)
+        eng1 = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertAlmostEqual(eng1.portfolio["peak_equity"], 10498.50, places=2)
+        self.assertAlmostEqual(eng1.portfolio["cash_balance"], 8998.50, places=2)
+        self.assertAlmostEqual(eng1.portfolio["equity"], 10048.50, places=2)
+
+        # 2. Run Migration a Second Time (Idempotency)
+        eng2 = PaperExecutionEngine(db_path=mig_db, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertAlmostEqual(eng2.portfolio["peak_equity"], 10498.50, places=2)
+        self.assertAlmostEqual(eng2.portfolio["cash_balance"], 8998.50, places=2)
+        self.assertAlmostEqual(eng2.portfolio["equity"], 10048.50, places=2)
+
+        # 3. Path 2: Test database where phase_2_2f marker is already present
+        mig_db2 = os.path.join(self.test_dir, "mig_test_53_path2.db")
+        _init2 = PaperExecutionEngine(db_path=mig_db2, market_db_path=self.market_db, initial_capital=10000.0)
+        del _init2
+        conn2 = sqlite3.connect(mig_db2)
+        conn2.execute("DELETE FROM paper_schema_migrations;")
+        conn2.execute("INSERT INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2f_portfolio_migration', '2024-01-01T00:00:00');")
+        conn2.execute("DELETE FROM paper_positions;")
+        conn2.execute("DELETE FROM paper_portfolio;")
+        conn2.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (1, '2024-01-01T10:00:00+00:00', 8998.50, 10048.50, 0.0, 50.0, 1000.0, 11498.50, 0.0, 0.3, 0.3);
+        """)
+        conn2.execute("""
+        INSERT INTO paper_portfolio (id, timestamp, cash_balance, equity, realized_pnl, unrealized_pnl, margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage)
+        VALUES (2, '2024-01-01T11:30:00+00:00', 9998.50, 11498.50, 0.0, 500.0, 1000.0, 11498.50, 0.0, 0.3, 0.3);
+        """)
+        conn2.execute("""
+        INSERT INTO paper_positions (position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage, stop_loss, take_profit, entry_time, status, accumulated_funding)
+        VALUES ('pos_53_2', 'Strat_53', 'ETHUSDT', 'LONG', 3000.0, 1.0, 3000.0, 1000.0, 0.3, 2900.0, 3200.0, '2024-01-01T11:00:00+00:00', 'OPEN', 0.0);
+        """)
+        conn2.commit()
+        conn2.close()
+
+        eng3 = PaperExecutionEngine(db_path=mig_db2, market_db_path=self.market_db, initial_capital=10000.0)
+        self.assertAlmostEqual(eng3.portfolio["peak_equity"], 10498.50, places=2)
+
+    # -------------------------------------------------------------------------
+    # Test 54: Live Stop & Live Take Profit Separated Fill Models (Section E)
+    # -------------------------------------------------------------------------
+    def test_54_live_stop_and_take_profit_fill_models_section_e(self):
+        """Test Section E: Live protective stops execute against executable book quotes with adverse slippage, accounting for market blowing past stop."""
+        engine = PaperExecutionEngine(db_path=self.paper_db, market_db_path=self.market_db, initial_capital=20000.0)
+        now_ms = int(time.time() * 1000)
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+
+        # 1. Long Live Protective Stop: stop is 2900, market blew past to best_bid 2850
+        engine.open_position("Strat_L_Stop", "ETHUSDT", "LONG", 1.0, 2900.0, 3200.0, quote)
+        quote_gap_down = {"best_bid": 2850.0, "best_ask": 2851.0, "receipt_ts": now_ms + 1000}
+        trade_l = engine.close_position("Strat_L_Stop", "ETHUSDT", "stop_loss", quote=quote_gap_down)
+        # Fill price MUST be 2850 * (1 - 0.0003) = 2849.14 (NEVER favorable 2900!)
+        expected_fill_l = engine.quantize_price("ETHUSDT", 2850.0 * (1.0 - engine.slippage_rate))
+        self.assertEqual(trade_l["exit_price"], expected_fill_l)
+
+        # 2. Short Live Protective Stop: stop is 3100, market blew past to best_ask 3150
+        engine.open_position("Strat_S_Stop", "ETHUSDT", "SHORT", 1.0, 3100.0, 2800.0, quote)
+        quote_gap_up = {"best_bid": 3149.0, "best_ask": 3150.0, "receipt_ts": now_ms + 2000}
+        trade_s = engine.close_position("Strat_S_Stop", "ETHUSDT", "stop_loss", quote=quote_gap_up)
+        # Fill price MUST be 3150 * (1 + 0.0003) = 3150.95 (NEVER favorable 3100!)
+        expected_fill_s = engine.quantize_price("ETHUSDT", 3150.0 * (1.0 + engine.slippage_rate))
+        self.assertEqual(trade_s["exit_price"], expected_fill_s)
+
+        # 3. Long Live Take Profit: target is 3200, executable bid is 3220
+        engine.open_position("Strat_L_TP", "ETHUSDT", "LONG", 1.0, 2800.0, 3200.0, quote)
+        quote_tp_l = {"best_bid": 3220.0, "best_ask": 3221.0, "receipt_ts": now_ms + 3000}
+        trade_tp_l = engine.close_position("Strat_L_TP", "ETHUSDT", "take_profit", quote=quote_tp_l)
+        expected_tp_fill_l = engine.quantize_price("ETHUSDT", 3220.0 * (1.0 - engine.slippage_rate))
+        self.assertEqual(trade_tp_l["exit_price"], expected_tp_fill_l)
+
+        # 4. Short Live Take Profit: target is 2800, executable ask is 2780
+        engine.open_position("Strat_S_TP", "ETHUSDT", "SHORT", 1.0, 3200.0, 2800.0, quote)
+        quote_tp_s = {"best_bid": 2779.0, "best_ask": 2780.0, "receipt_ts": now_ms + 4000}
+        trade_tp_s = engine.close_position("Strat_S_TP", "ETHUSDT", "take_profit", quote=quote_tp_s)
+        expected_tp_fill_s = engine.quantize_price("ETHUSDT", 2780.0 * (1.0 + engine.slippage_rate))
+        self.assertEqual(trade_tp_s["exit_price"], expected_tp_fill_s)
+
 
 if __name__ == "__main__":
     unittest.main()

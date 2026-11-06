@@ -146,7 +146,9 @@ class PaperExecutionEngine:
                 entry_time TEXT NOT NULL,
                 exit_time TEXT,
                 status TEXT NOT NULL,
-                accumulated_funding REAL NOT NULL DEFAULT 0.0
+                accumulated_funding REAL NOT NULL DEFAULT 0.0,
+                current_price REAL,
+                last_mark_time TEXT
             );
             """)
 
@@ -224,6 +226,10 @@ class PaperExecutionEngine:
             pos_cols = {row[1] for row in cur.fetchall()}
             if "strategy_id" not in pos_cols:
                 conn.execute("ALTER TABLE paper_positions ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
+            if "current_price" not in pos_cols:
+                conn.execute("ALTER TABLE paper_positions ADD COLUMN current_price REAL;")
+            if "last_mark_time" not in pos_cols:
+                conn.execute("ALTER TABLE paper_positions ADD COLUMN last_mark_time TEXT;")
 
             # C. Migrate paper_orders columns
             cur.execute("PRAGMA table_info(paper_orders);")
@@ -288,124 +294,103 @@ class PaperExecutionEngine:
             elif "strategy_id" not in trade_cols:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'CandidateA_Momentum_Continuation';")
 
-            # 7. Versioned one-time migration: Phase 2.2F portfolio repair and available-cash conversion
+            # 7. Versioned one-time migration: Consolidated paper execution integrity migration
             conn.execute("""
             CREATE TABLE IF NOT EXISTS paper_schema_migrations (
                 migration_id TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
             """)
-            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2f_portfolio_migration'")
+            cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'consolidated_integrity_migration'")
             if cur.fetchone()[0] == 0:
+                cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2f_portfolio_migration'")
+                had_phase_2_2f = (cur.fetchone()[0] > 0)
+
                 # Inspect active open positions in paper_positions
                 cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
                 open_margin = float(cur.fetchone()[0])
 
-                # Check latest row in paper_portfolio
+                # Query complete portfolio history
                 cur.execute("""
-                SELECT id, cash_balance, equity, unrealized_pnl, margin_used, peak_equity, realized_pnl
-                FROM paper_portfolio ORDER BY id DESC LIMIT 1
+                SELECT id, timestamp, cash_balance, equity, unrealized_pnl, margin_used, peak_equity, realized_pnl
+                FROM paper_portfolio ORDER BY id ASC
                 """)
-                port_row = cur.fetchone()
-                if port_row and open_margin > 0:
-                    p_id = port_row[0]
-                    p_cash = float(port_row[1])
-                    p_equity = float(port_row[2])
-                    p_unrealized = float(port_row[3])
-                    p_margin = float(port_row[4])
-                    p_peak = float(port_row[5])
-                    p_realized = float(port_row[6])
+                all_rows = cur.fetchall()
 
-                    # Detection of legacy incorrect balance (even if phase_2_2d_available_cash_migration was marked!):
-                    # In Phase 2.2B:
-                    #   equity = cash_balance + margin_used + unrealized_pnl
-                    # where cash_balance was NOT decremented by margin_req on entry.
-                    # As a result, equity was inflated: legacy_equity ≈ available_cash + 2 * open_margin + unrealized
-                    # In Phase 2.2D partial migration: cash was decremented but equity was NOT decremented.
-                    needs_cash_migration = (p_cash + open_margin > initial_capital + p_realized - 1.0) or (abs(p_cash - p_equity) < 1.0)
-                    needs_equity_migration = (
-                        (abs(p_equity - (p_cash + open_margin + p_unrealized)) < 0.1 and needs_cash_migration)
-                        or (abs(p_equity - (p_cash + 2 * open_margin + p_unrealized)) < 0.1)
-                        or (p_equity > initial_capital + p_realized + p_unrealized + 0.5 * open_margin)
-                    )
+                if all_rows:
+                    p_id, p_ts, p_cash, p_equity, p_unrealized, p_margin, p_peak, p_realized = all_rows[-1]
+                    p_cash = float(p_cash)
+                    p_equity = float(p_equity)
+                    p_unrealized = float(p_unrealized)
+                    p_peak = float(p_peak)
+                    p_realized = float(p_realized)
 
-                    if needs_cash_migration or needs_equity_migration:
+                    # Determine if available-cash conversion is needed
+                    if open_margin > 0:
+                        needs_cash_migration = (p_cash + open_margin > initial_capital + p_realized - 1.0) or (abs(p_cash - p_equity) < 1.0)
                         new_cash = (p_cash - open_margin) if needs_cash_migration else p_cash
                         new_equity = new_cash + open_margin + p_unrealized
+                    else:
+                        new_cash = p_cash
+                        new_equity = p_equity
 
-                        # Peak Equity Migration (Issue 4):
-                        # Correctly calculate historical peak equity without blindly subtracting open_margin.
-                        cur.execute("SELECT equity, margin_used, unrealized_pnl, cash_balance FROM paper_portfolio ORDER BY id ASC")
-                        all_rows = cur.fetchall()
-                        historical_true_equities = [initial_capital, new_equity]
-                        for r_eq, r_mg, r_unreal, r_c in all_rows:
-                            r_eq, r_mg, r_unreal, r_c = float(r_eq), float(r_mg), float(r_unreal), float(r_c)
-                            if r_mg > 0:
-                                # Check if this historical row was inflated by Phase 2.2B double-counting
-                                if (abs(r_eq - (r_c + r_mg + r_unreal)) < 0.1) or (r_c + r_mg > initial_capital - 100.0) or (r_eq > initial_capital + 0.5 * r_mg):
-                                    true_r_eq = r_eq - r_mg
-                                else:
-                                    true_r_eq = r_eq
+                    # Reconstruct true historical equity strictly from historical portfolio records
+                    historical_true_equities = [initial_capital, new_equity]
+                    for r_id, r_ts, r_c, r_eq, r_unreal, r_mg, r_pk, r_real in all_rows:
+                        r_eq, r_mg, r_c, r_unreal, r_real = float(r_eq), float(r_mg), float(r_c), float(r_unreal), float(r_real)
+                        if r_mg > 0:
+                            # If historical row was inflated by Phase 2.2B unreduced cash, true equity was r_eq - r_mg
+                            if (abs(r_eq - (r_c + r_mg + r_unreal)) < 0.1) or (r_c + r_mg > initial_capital + r_real - 1.0):
+                                historical_true_equities.append(r_eq - r_mg)
                             else:
-                                true_r_eq = r_eq
-                            historical_true_equities.append(true_r_eq)
-
-                        # Check if p_peak was achieved when margin was zero (genuine peak before position opened)
-                        cur.execute("SELECT COUNT(*) FROM paper_portfolio WHERE margin_used = 0 AND (equity >= ? OR peak_equity >= ?)", (p_peak - 0.01, p_peak - 0.01))
-                        zero_margin_peak_count = cur.fetchone()[0]
-                        if zero_margin_peak_count > 0:
-                            historical_true_equities.append(p_peak)
+                                historical_true_equities.append(r_eq)
                         else:
-                            historical_true_equities.append(p_peak - open_margin)
+                            historical_true_equities.append(r_eq)
 
-                        new_peak = max(historical_true_equities)
-                        new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
+                    proven_peak = max(historical_true_equities)
 
-                        conn.execute("""
-                        UPDATE paper_portfolio
-                        SET cash_balance = ?, equity = ?, margin_used = ?, peak_equity = ?, drawdown_pct = ?
-                        WHERE id = ?
-                        """, (
-                            round(new_cash, 2),
-                            round(new_equity, 2),
-                            round(open_margin, 2),
-                            round(new_peak, 2),
-                            round(new_drawdown, 2),
-                            p_id
-                        ))
-                        logger.info(
-                            f"Phase 2.2F Migration: repaired portfolio (cash ${p_cash:.2f} -> ${new_cash:.2f}, "
-                            f"equity ${p_equity:.2f} -> ${new_equity:.2f}, peak ${p_peak:.2f} -> ${new_peak:.2f}, "
-                            f"margin: ${open_margin:.2f})"
-                        )
+                    if p_peak > proven_peak:
+                        # Attempt to reliably match p_peak to a historical record
+                        matching_rows = [r for r in all_rows if abs(float(r[3]) - p_peak) < 0.05 or abs(float(r[6]) - p_peak) < 0.05]
+                        if matching_rows:
+                            matched_mg = float(matching_rows[0][5])
+                            if matched_mg > 0:
+                                reconstructed_peak = max(proven_peak, p_peak - matched_mg)
+                            else:
+                                reconstructed_peak = max(proven_peak, p_peak)
+                        else:
+                            # Peak cannot be reliably verified from history: preserve original and report ambiguity
+                            logger.warning(
+                                f"Historical peak equity ${p_peak:.2f} cannot be reliably reconstructed "
+                                f"from portfolio history. Preserving original value without modification."
+                            )
+                            reconstructed_peak = p_peak
+                    else:
+                        reconstructed_peak = proven_peak
+
+                    new_drawdown = ((reconstructed_peak - new_equity) / reconstructed_peak * 100.0) if reconstructed_peak > 0 else 0.0
+
+                    conn.execute("""
+                    UPDATE paper_portfolio
+                    SET cash_balance = ?, equity = ?, margin_used = ?, peak_equity = ?, drawdown_pct = ?
+                    WHERE id = ?
+                    """, (
+                        round(new_cash, 2),
+                        round(new_equity, 2),
+                        round(open_margin, 2),
+                        round(reconstructed_peak, 2),
+                        round(new_drawdown, 2),
+                        p_id
+                    ))
+                    logger.info(
+                        f"Consolidated Migration: repaired portfolio (cash ${p_cash:.2f} -> ${new_cash:.2f}, "
+                        f"equity ${p_equity:.2f} -> ${new_equity:.2f}, peak ${p_peak:.2f} -> ${reconstructed_peak:.2f}, "
+                        f"margin: ${open_margin:.2f})"
+                    )
 
                 now_mig_str = datetime.now(timezone.utc).isoformat()
                 conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2f_portfolio_migration', ?)", (now_mig_str,))
-                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2h_peak_equity_migration', ?)", (now_mig_str,))
-            else:
-                # Phase 2.2H Migration: Check and repair historical peak equity if previous peak occurred during open position
-                cur.execute("SELECT COUNT(*) FROM paper_schema_migrations WHERE migration_id = 'phase_2_2h_peak_equity_migration'")
-                if cur.fetchone()[0] == 0:
-                    cur.execute("SELECT COALESCE(SUM(margin), 0.0) FROM paper_positions WHERE status = 'OPEN'")
-                    open_margin = float(cur.fetchone()[0])
-                    cur.execute("SELECT id, equity, peak_equity, cash_balance, margin_used FROM paper_portfolio ORDER BY id DESC LIMIT 1")
-                    last_p = cur.fetchone()
-                    if last_p and open_margin > 0:
-                        p_id, p_eq, p_pk, p_cb, p_mu = last_p
-                        p_eq, p_pk, p_cb, p_mu = float(p_eq), float(p_pk), float(p_cb), float(p_mu)
-                        cur.execute("SELECT COUNT(*) FROM paper_portfolio WHERE margin_used = 0 AND (equity >= ? OR peak_equity >= ?)", (p_pk - 0.01, p_pk - 0.01))
-                        if cur.fetchone()[0] == 0 and p_pk > p_eq and p_pk > initial_capital:
-                            corrected_peak = max(p_pk - open_margin, p_eq, initial_capital)
-                            corrected_dd = ((corrected_peak - p_eq) / corrected_peak * 100.0) if corrected_peak > 0 else 0.0
-                            conn.execute("""
-                            UPDATE paper_portfolio
-                            SET peak_equity = ?, drawdown_pct = ?
-                            WHERE id = ?
-                            """, (round(corrected_peak, 2), round(corrected_dd, 2), p_id))
-                            logger.info(f"Phase 2.2H Migration: repaired historical peak equity (${p_pk:.2f} -> ${corrected_peak:.2f})")
-
-                    now_mig_h = datetime.now(timezone.utc).isoformat()
-                    conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('phase_2_2h_peak_equity_migration', ?)", (now_mig_h,))
+                conn.execute("INSERT OR REPLACE INTO paper_schema_migrations (migration_id, applied_at) VALUES ('consolidated_integrity_migration', ?)", (now_mig_str,))
 
             # Check if portfolio initialized
             cursor = conn.execute("SELECT COUNT(*) FROM paper_portfolio")
@@ -456,12 +441,14 @@ class PaperExecutionEngine:
             # Load active virtual positions
             cursor = conn.execute("""
             SELECT position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage,
-                   stop_loss, take_profit, entry_time, accumulated_funding
+                   stop_loss, take_profit, entry_time, accumulated_funding, current_price, last_mark_time
             FROM paper_positions WHERE status = 'OPEN'
             """)
             for p_row in cursor.fetchall():
                 pos_id = p_row[0]
-                key = (p_row[1], p_row[2])
+                strat_id = p_row[1]
+                sym = p_row[2]
+                key = (strat_id, sym)
 
                 # Atomically reconcile accumulated funding from position_funding_payments
                 cur_f = conn.cursor()
@@ -470,10 +457,28 @@ class PaperExecutionEngine:
                 payment_sum = float(p_sum[0]) if (p_sum and p_sum[0] is not None) else 0.0
                 acc_funding = payment_sum if payment_sum != 0.0 else float(p_row[12])
 
+                c_px = float(p_row[13]) if (p_row[13] is not None and float(p_row[13]) > 0) else None
+                last_mt = p_row[14] if len(p_row) > 14 else None
+
+                if c_px is None and os.path.exists(self.market_db_path):
+                    try:
+                        with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                            m_cur = m_conn.cursor()
+                            m_cur.execute(
+                                "SELECT mark_price, timestamp FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
+                                (sym,)
+                            )
+                            m_row = m_cur.fetchone()
+                            if m_row and m_row[0] is not None:
+                                c_px = float(m_row[0])
+                                last_mt = datetime.fromtimestamp(int(m_row[1])/1000.0, tz=timezone.utc).isoformat()
+                    except Exception:
+                        pass
+
                 self.active_positions[key] = {
                     "position_id": pos_id,
-                    "strategy_id": p_row[1],
-                    "symbol": p_row[2],
+                    "strategy_id": strat_id,
+                    "symbol": sym,
                     "side": p_row[3],
                     "entry_price": float(p_row[4]),
                     "quantity": float(p_row[5]),
@@ -484,7 +489,9 @@ class PaperExecutionEngine:
                     "take_profit": float(p_row[10]),
                     "entry_time": p_row[11],
                     "accumulated_funding": acc_funding,
-                    "status": "OPEN"
+                    "status": "OPEN",
+                    "current_price": c_px,
+                    "last_mark_time": last_mt
                 }
 
             # Reconcile legacy cash balance if loaded from database where margin was not deducted
@@ -493,6 +500,24 @@ class PaperExecutionEngine:
                 if abs(self.portfolio["cash_balance"] - self.portfolio["equity"]) < 1e-4:
                     self.portfolio["cash_balance"] -= actual_margin
             self.portfolio["margin_used"] = actual_margin
+
+            # Restore unrealized PnL and reconcile equity from verified position mark prices
+            if self.active_positions:
+                total_unrealized = 0.0
+                all_have_marks = True
+                for p in self.active_positions.values():
+                    if p.get("current_price") is not None:
+                        u = (p["current_price"] - p["entry_price"]) * p["quantity"] if p["side"] == "LONG" else (p["entry_price"] - p["current_price"]) * p["quantity"]
+                        total_unrealized += u
+                    else:
+                        all_have_marks = False
+                if all_have_marks:
+                    self.portfolio["unrealized_pnl"] = total_unrealized
+                    self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"] + total_unrealized
+                    if self.portfolio["equity"] > self.portfolio["peak_equity"]:
+                        self.portfolio["peak_equity"] = self.portfolio["equity"]
+                    pk = self.portfolio["peak_equity"]
+                    self.portfolio["drawdown_pct"] = ((pk - self.portfolio["equity"]) / pk * 100.0) if pk > 0 else 0.0
             self.portfolio["equity"] = self.portfolio["cash_balance"] + self.portfolio["margin_used"] + self.portfolio["unrealized_pnl"]
 
         logger.info(f"Loaded Paper State | Cash: ${self.portfolio['cash_balance']:.2f} | Equity: ${self.portfolio['equity']:.2f} | Active Positions: {list(self.active_positions.keys())}")
@@ -629,10 +654,16 @@ class PaperExecutionEngine:
             logger.warning(f"Insufficient cash balance (${self.portfolio['cash_balance']:.2f}) for margin ${margin_req:.2f} + fee ${fee_usd:.2f}.")
             return None
 
-        # Issue 6: Prepare accounting values without mutating in-memory state before DB commit
+        # Issue 6 & Section B: Prepare accounting values without mutating in-memory state before DB commit
         new_cash = self.portfolio["cash_balance"] - (margin_req + fee_usd)
         new_margin = self.portfolio["margin_used"] + margin_req
         new_equity = new_cash + new_margin + self.portfolio["unrealized_pnl"]
+        new_peak = max(self.portfolio["peak_equity"], new_equity)
+        new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
+        new_gross_notional = current_gross_notional + notional
+        new_gross_leverage = new_gross_notional / max(1.0, new_equity)
+        new_net_notional = sum(p["notional"] if p["side"] == "LONG" else -p["notional"] for p in self.active_positions.values()) + (notional if side == "LONG" else -notional)
+        new_net_leverage = abs(new_net_notional) / max(1.0, new_equity)
 
         now_str = entry_time_str or datetime.now(timezone.utc).isoformat()
         pos_id = f"{strategy_id}_{symbol}_{uuid.uuid4().hex[:8]}"
@@ -653,18 +684,21 @@ class PaperExecutionEngine:
             "entry_time": now_str,
             "entry_fee_usd": fee_usd,
             "accumulated_funding": 0.0,
-            "status": "OPEN"
+            "status": "OPEN",
+            "current_price": fill_price,
+            "last_mark_time": now_str
         }
 
+        # Single Transaction for Position, Order, and Portfolio Snapshot
         with self._get_connection() as conn:
             conn.execute("""
             INSERT INTO paper_positions (
                 position_id, strategy_id, symbol, side, entry_price, quantity, notional, margin, leverage,
-                stop_loss, take_profit, entry_time, status, accumulated_funding
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 0.0);
+                stop_loss, take_profit, entry_time, status, accumulated_funding, current_price, last_mark_time
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 0.0, ?, ?);
             """, (
                 pos_id, strategy_id, symbol, side, fill_price, quantized_qty, notional, margin_req,
-                pos["leverage"], pos["stop_loss"], pos["take_profit"], now_str
+                pos["leverage"], pos["stop_loss"], pos["take_profit"], now_str, fill_price, now_str
             ))
 
             conn.execute("""
@@ -676,16 +710,38 @@ class PaperExecutionEngine:
                 order_id, pos_id, strategy_id, symbol, side, quote_used, fill_price,
                 quantized_qty, notional, fee_usd, slippage_usd, now_str, now_str
             ))
+
+            # Include portfolio snapshot in the exact same transaction
+            conn.execute("""
+            INSERT INTO paper_portfolio (
+                timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+                margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                now_str,
+                round(new_cash, 2),
+                round(new_equity, 2),
+                round(self.portfolio["realized_pnl"], 2),
+                round(self.portfolio["unrealized_pnl"], 2),
+                round(new_margin, 2),
+                round(new_peak, 2),
+                round(new_drawdown, 2),
+                round(new_gross_leverage, 2),
+                round(new_net_leverage, 2)
+            ))
             conn.commit()
 
         # Update in-memory state ONLY AFTER successful database commit
         self.portfolio["cash_balance"] = new_cash
         self.portfolio["margin_used"] = new_margin
         self.portfolio["equity"] = new_equity
+        self.portfolio["peak_equity"] = new_peak
+        self.portfolio["drawdown_pct"] = new_drawdown
+        self.portfolio["gross_leverage"] = round(new_gross_leverage, 2)
+        self.portfolio["net_leverage"] = round(new_net_leverage, 2)
 
         self.active_positions[key] = pos
         self._update_portfolio_leverage()
-        self.save_portfolio_snapshot()
         logger.info(f"[{strategy_id}] Opened {side} Position: {symbol} | Qty: {quantized_qty:.4f} | Entry Px: ${fill_price:.2f} | SL: ${pos['stop_loss']:.2f} | TP: ${pos['take_profit']:.2f} | Fee: ${fee_usd:.2f}")
         return pos
 
@@ -697,12 +753,16 @@ class PaperExecutionEngine:
         quote: Optional[Dict[str, Any]] = None,
         adverse_gap_price: Optional[float] = None,
         exit_time_str: Optional[str] = None,
-        candle_price: Optional[float] = None
+        candle_price: Optional[float] = None,
+        processed_candle_info: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Closes an open position with realistic fee, adverse slippage, and separated PnL accounting.
-        Supports adverse opening gap fills when triggered by a gap beyond stop-loss.
-        Guarantees that historical candle replays never use live quotes as fill prices.
+        Enforces Section A/B/C/E requirements:
+          - Conditional update (status = 'OPEN') with rowcount == 1 verification.
+          - Single-transaction atomicity for position status, exit order, trade, and portfolio snapshot.
+          - Separated fill models: live protective stop uses executable book quote; historical uses simulation model.
+          - Multi-position MTM recalculation across all remaining open positions.
         """
         key = (strategy_id, symbol)
         pos = self.active_positions.get(key)
@@ -714,46 +774,65 @@ class PaperExecutionEngine:
         qty = pos["quantity"]
         entry_price = pos["entry_price"]
 
-        # Determine Fill Price based on Exit Reason:
-        if exit_reason in ["stop_loss", "stop_loss_collision"]:
-            # Stop-loss touch or same-bar SL/TP collision (stop-first): fill at stop level with adverse slippage
+        # Determine Fill Price based on Exit Reason and execution mode (Section E)
+        if quote is not None:
+            # Live Protective Execution with executable book quotes and adverse slippage
+            best_bid, best_ask = self.validate_quote_freshness(quote)
+            if exit_reason in ["stop_loss", "stop_loss_collision"]:
+                # Protective stop triggered live: execute at executable quote, accounting for market blowing past stop
+                if side == "LONG":
+                    quote_used = min(float(pos["stop_loss"]), best_bid)
+                    fill_price = self.quantize_price(symbol, quote_used * (1.0 - self.slippage_rate))
+                else:
+                    quote_used = max(float(pos["stop_loss"]), best_ask)
+                    fill_price = self.quantize_price(symbol, quote_used * (1.0 + self.slippage_rate))
+            elif exit_reason == "take_profit":
+                # Live take profit: execute against executable book quote with adverse taker slippage
+                if side == "LONG":
+                    quote_used = best_bid
+                    fill_price = self.quantize_price(symbol, best_bid * (1.0 - self.slippage_rate))
+                else:
+                    quote_used = best_ask
+                    fill_price = self.quantize_price(symbol, best_ask * (1.0 + self.slippage_rate))
+            else:
+                # Standard live market exit (manual_exit, live horizon_expiry, circuit_breaker)
+                if side == "LONG":
+                    quote_used = best_bid
+                    fill_price = self.quantize_price(symbol, best_bid * (1.0 - self.slippage_rate))
+                else:
+                    quote_used = best_ask
+                    fill_price = self.quantize_price(symbol, best_ask * (1.0 + self.slippage_rate))
+        elif exit_reason in ["stop_loss", "stop_loss_collision"]:
+            # Historical candle stop touch: fill at stop price with adverse slippage
             stop_px = float(pos["stop_loss"])
+            quote_used = stop_px
             if side == "LONG":
                 fill_price = self.quantize_price(symbol, stop_px * (1.0 - self.slippage_rate))
             else:
                 fill_price = self.quantize_price(symbol, stop_px * (1.0 + self.slippage_rate))
-            quote_used = stop_px
         elif exit_reason == "stop_loss_gap":
-            # Adverse opening gap: fill from opening price with adverse slippage
+            # Historical adverse opening gap: fill from bar opening price with adverse slippage
             gap_base = adverse_gap_price if (adverse_gap_price is not None and adverse_gap_price > 0) else float(pos["stop_loss"])
+            quote_used = gap_base
             if side == "LONG":
                 fill_price = self.quantize_price(symbol, gap_base * (1.0 - self.slippage_rate))
             else:
                 fill_price = self.quantize_price(symbol, gap_base * (1.0 + self.slippage_rate))
-            quote_used = gap_base
         elif exit_reason == "take_profit":
-            # Take-profit target fill: clearly defined conservative target fill (exact target price, 0 slippage)
+            # Historical take-profit target fill: clearly defined conservative target fill (exact target price)
             target_px = float(pos["take_profit"])
-            fill_price = self.quantize_price(symbol, target_px)
             quote_used = target_px
+            fill_price = self.quantize_price(symbol, target_px)
         elif candle_price is not None and candle_price > 0:
-            # Historical candle exit (e.g. horizon expiry or bar close during replay):
-            # Fill strictly using the candle price with adverse slippage, NEVER live quotes
+            # Historical candle close exit (e.g. horizon expiry or bar close during replay)
             c_px = float(candle_price)
+            quote_used = c_px
             if side == "LONG":
                 fill_price = self.quantize_price(symbol, c_px * (1.0 - self.slippage_rate))
             else:
                 fill_price = self.quantize_price(symbol, c_px * (1.0 + self.slippage_rate))
-            quote_used = c_px
         else:
-            # Standard real-time market exit (manual_exit, live horizon_expiry, circuit_breaker): fresh quote validation
-            best_bid, best_ask = self.validate_quote_freshness(quote)
-            if side == "LONG":
-                fill_price = self.quantize_price(symbol, best_bid * (1.0 - self.slippage_rate))
-                quote_used = best_bid
-            else:
-                fill_price = self.quantize_price(symbol, best_ask * (1.0 + self.slippage_rate))
-                quote_used = best_ask
+            raise ValueError(f"Cannot execute exit '{exit_reason}' for {symbol}: neither valid quote nor historical candle price provided.")
 
         # Directional PnL
         if side == "LONG":
@@ -771,17 +850,12 @@ class PaperExecutionEngine:
         net_pnl = directional_pnl + funding_pnl - entry_fee_usd - exit_fee_usd
 
         # Release Reserved Margin & Settle Directional PnL and Exit Fee to Available Cash
-        # NOTE:
-        # 1. Entry fee was already deducted from available cash at open_position.
-        # 2. Funding was already applied to available cash during settlement in apply_settled_funding_rates.
-        # 3. Therefore, cash balance update at close is ONLY: + margin_req + directional_pnl - exit_fee_usd.
         margin_req = pos["margin"]
         new_cash = self.portfolio["cash_balance"] + (margin_req + directional_pnl - exit_fee_usd)
         new_margin = max(0.0, self.portfolio["margin_used"] - margin_req)
         new_realized = self.portfolio["realized_pnl"] + net_pnl
 
-        # Issue 5: Recalculate unrealized PnL and equity for all remaining open positions.
-        # Never reset portfolio-wide unrealized PnL to zero blindly!
+        # Recalculate unrealized PnL and equity for all remaining open positions (Section D)
         remaining_unrealized = 0.0
         for r_key, r_pos in self.active_positions.items():
             if r_key == key:
@@ -795,7 +869,24 @@ class PaperExecutionEngine:
             if quote and r_sym == symbol:
                 cur_px = quote.get("mid_price") or quote.get("best_bid") or quote.get("best_ask")
             if cur_px is None:
-                cur_px = float(r_pos.get("current_price", r_entry))
+                cur_px = r_pos.get("current_price")
+            if cur_px is None and os.path.exists(self.market_db_path):
+                try:
+                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                        m_cur = m_conn.cursor()
+                        m_cur.execute(
+                            "SELECT mark_price FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
+                            (r_sym,)
+                        )
+                        m_row = m_cur.fetchone()
+                        if m_row and m_row[0] is not None:
+                            cur_px = float(m_row[0])
+                except Exception:
+                    pass
+
+            if cur_px is None:
+                cur_px = r_entry
+            cur_px = float(cur_px)
 
             if r_side == "LONG":
                 u_pnl = (cur_px - r_entry) * r_qty
@@ -810,6 +901,11 @@ class PaperExecutionEngine:
         new_peak = max(self.portfolio["peak_equity"], new_equity)
         new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
 
+        remaining_gross_notional = sum(p["notional"] for k, p in self.active_positions.items() if k != key)
+        new_gross_leverage = remaining_gross_notional / max(1.0, new_equity)
+        remaining_net_notional = sum((p["notional"] if p["side"] == "LONG" else -p["notional"]) for k, p in self.active_positions.items() if k != key)
+        new_net_leverage = abs(remaining_net_notional) / max(1.0, new_equity)
+
         now_str = exit_time_str or datetime.now(timezone.utc).isoformat()
         trade_id = f"tr_{uuid.uuid4().hex[:8]}"
         order_id = f"ord_exit_{uuid.uuid4().hex[:8]}"
@@ -821,15 +917,24 @@ class PaperExecutionEngine:
         except Exception:
             holding_hours = 1.0
 
+        # Section A & B: Single transaction for status update, exit order, trade, and portfolio snapshot
         with self._get_connection() as conn:
-            # Update position status
-            conn.execute("""
+            # 1. Update position status conditional on status = 'OPEN'
+            cur = conn.execute("""
             UPDATE paper_positions
             SET status = 'CLOSED', exit_time = ?
-            WHERE position_id = ?;
+            WHERE position_id = ? AND status = 'OPEN';
             """, (now_str, pos["position_id"]))
 
-            # Insert exit order
+            if cur.rowcount != 1:
+                conn.rollback()
+                logger.warning(
+                    f"Position '{pos['position_id']}' cannot be closed (rowcount={cur.rowcount}). "
+                    f"Position is already CLOSED or non-existent. Rejecting duplicate close."
+                )
+                return None
+
+            # 2. Insert exit order
             conn.execute("""
             INSERT INTO paper_orders (
                 order_id, position_id, strategy_id, symbol, side, order_type, requested_price,
@@ -841,7 +946,7 @@ class PaperExecutionEngine:
                 qty, notional_exit, exit_fee_usd, slippage_cost, now_str, now_str
             ))
 
-            # Insert completed trade record
+            # 3. Insert completed trade record
             conn.execute("""
             INSERT INTO paper_trades (
                 trade_id, strategy_id, symbol, side, entry_time, exit_time, entry_price, exit_price,
@@ -854,9 +959,43 @@ class PaperExecutionEngine:
                 round(funding_pnl, 2), round(entry_fee_usd, 4), round(exit_fee_usd, 4),
                 round(slippage_cost, 4), round(net_pnl, 2), exit_reason
             ))
+
+            # 4. Insert portfolio snapshot in the EXACT SAME transaction!
+            conn.execute("""
+            INSERT INTO paper_portfolio (
+                timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+                margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                now_str,
+                round(new_cash, 2),
+                round(new_equity, 2),
+                round(new_realized, 2),
+                round(new_unrealized, 2),
+                round(new_margin, 2),
+                round(new_peak, 2),
+                round(new_drawdown, 2),
+                round(new_gross_leverage, 2),
+                round(new_net_leverage, 2)
+            ))
+
+            # 5. Insert processed candle record if provided (Section C single transaction)
+            if processed_candle_info is not None:
+                conn.execute("""
+                INSERT OR IGNORE INTO processed_1m_candles (
+                    strategy_id, symbol, open_time, close_time, processed_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """, (
+                    processed_candle_info["strategy_id"],
+                    processed_candle_info["symbol"],
+                    int(processed_candle_info["open_time"]),
+                    int(processed_candle_info["close_time"]),
+                    processed_candle_info.get("processed_at", now_str)
+                ))
+
             conn.commit()
 
-        # Issue 6: Update in-memory state ONLY AFTER successful database commit
+        # Update in-memory state ONLY AFTER successful database commit
         self.portfolio["cash_balance"] = new_cash
         self.portfolio["margin_used"] = new_margin
         self.portfolio["realized_pnl"] = new_realized
@@ -864,10 +1003,11 @@ class PaperExecutionEngine:
         self.portfolio["equity"] = new_equity
         self.portfolio["peak_equity"] = new_peak
         self.portfolio["drawdown_pct"] = new_drawdown
+        self.portfolio["gross_leverage"] = round(new_gross_leverage, 2)
+        self.portfolio["net_leverage"] = round(new_net_leverage, 2)
 
         del self.active_positions[key]
         self._update_portfolio_leverage()
-        self.save_portfolio_snapshot()
         logger.info(f"[{strategy_id}] Closed {side} Position: {symbol} | Exit Px: ${fill_price:.2f} | Reason: {exit_reason} | Net PnL: ${net_pnl:.2f} | Dur: {holding_hours:.1f}h")
         return {
             "trade_id": trade_id,
@@ -986,13 +1126,51 @@ class PaperExecutionEngine:
     def update_mark_to_market(self, quotes: Dict[str, Dict[str, Any]]):
         """
         Updates portfolio unrealized PnL and leverage using fresh quotes for all active positions.
+        Section D:
+          - Maintains latest mark price and timestamp for every active position in memory and SQLite.
+          - Recalculates unrealized PnL and equity consistently: equity = cash + margin + unrealized.
+          - Updates peak equity and drawdown consistently.
+          - Persists mark-to-market snapshots so restarts do not silently lose equity peaks.
         """
+        if not self.active_positions:
+            return
+
+        now_str = datetime.now(timezone.utc).isoformat()
         total_unrealized = 0.0
+        updated_positions = []
+
         for (strat_id, sym), pos in self.active_positions.items():
-            q = quotes.get(sym)
-            if not q:
-                continue
-            mid_px = float(q.get("mid_price", pos["entry_price"]))
+            q = quotes.get(sym) if isinstance(quotes, dict) else None
+            mid_px = None
+            if q and isinstance(q, dict):
+                mid_px = q.get("mid_price") or q.get("best_bid") or q.get("best_ask")
+
+            if mid_px is None and os.path.exists(self.market_db_path):
+                try:
+                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                        m_cur = m_conn.cursor()
+                        m_cur.execute(
+                            "SELECT mark_price FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
+                            (sym,)
+                        )
+                        m_row = m_cur.fetchone()
+                        if m_row and m_row[0] is not None:
+                            mid_px = float(m_row[0])
+                except Exception:
+                    pass
+
+            if mid_px is None:
+                # Never silently substitute entry price! Use previous verified mark price
+                mid_px = pos.get("current_price")
+                if mid_px is None:
+                    logger.warning(f"No valid mark price available for {sym}. Cannot update position MTM.")
+                    continue
+
+            mid_px = float(mid_px)
+            pos["current_price"] = mid_px
+            pos["last_mark_time"] = now_str
+            updated_positions.append((mid_px, now_str, pos["position_id"]))
+
             if pos["side"] == "LONG":
                 unrealized = (mid_px - pos["entry_price"]) * pos["quantity"]
             else:
@@ -1008,6 +1186,34 @@ class PaperExecutionEngine:
         self.portfolio["drawdown_pct"] = ((peak - self.portfolio["equity"]) / peak * 100.0) if peak > 0 else 0.0
         self._update_portfolio_leverage(quotes)
 
+        # Persist position mark state and portfolio snapshot atomically
+        with self._get_connection() as conn:
+            for px, t_str, pid in updated_positions:
+                conn.execute("""
+                UPDATE paper_positions
+                SET current_price = ?, last_mark_time = ?
+                WHERE position_id = ?;
+                """, (px, t_str, pid))
+
+            conn.execute("""
+            INSERT INTO paper_portfolio (
+                timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+                margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                now_str,
+                round(self.portfolio["cash_balance"], 2),
+                round(self.portfolio["equity"], 2),
+                round(self.portfolio["realized_pnl"], 2),
+                round(self.portfolio["unrealized_pnl"], 2),
+                round(self.portfolio["margin_used"], 2),
+                round(self.portfolio["peak_equity"], 2),
+                round(self.portfolio["drawdown_pct"], 2),
+                round(self.portfolio.get("gross_leverage", 0.0), 2),
+                round(self.portfolio.get("net_leverage", 0.0), 2)
+            ))
+            conn.commit()
+
     def _update_portfolio_leverage(self, quotes: Optional[Dict[str, Dict[str, Any]]] = None):
         """Calculates current portfolio-level gross and net leverage."""
         eq = max(1.0, self.portfolio["equity"])
@@ -1015,7 +1221,7 @@ class PaperExecutionEngine:
         net_notional = 0.0
 
         for (strat_id, sym), pos in self.active_positions.items():
-            px = pos["entry_price"]
+            px = pos.get("current_price") or pos["entry_price"]
             if quotes and sym in quotes:
                 px = float(quotes[sym].get("mid_price", px))
             notional = pos["quantity"] * px
@@ -1039,6 +1245,7 @@ class PaperExecutionEngine:
         If max_settlement_time_ms is provided, settlements after that timestamp are excluded.
         Guarantees exact single-application (idempotency) via unique constraints.
         Updates in-memory state ONLY after successful database commit.
+        Includes portfolio snapshot in the same transaction (Section B).
         """
         if not os.path.exists(self.market_db_path) or not self.active_positions:
             return 0
@@ -1063,6 +1270,8 @@ class PaperExecutionEngine:
             return 0
 
         pending_payments = []
+        total_funding_payment = 0.0
+
         with self._get_connection() as conn:
             for sym, sett_time, f_rate, mp in settlement_rows:
                 if max_settlement_time_ms is not None and sett_time > max_settlement_time_ms:
@@ -1110,30 +1319,47 @@ class PaperExecutionEngine:
                     WHERE position_id = ?;
                     """, (payment, pos["position_id"]))
 
-                    # Atomically update portfolio cash balance and equity in DB
-                    conn.execute("""
-                    UPDATE paper_portfolio
-                    SET cash_balance = cash_balance + ?,
-                        equity = equity + ?,
-                        peak_equity = MAX(peak_equity, equity + ?),
-                        timestamp = ?
-                    WHERE id = (SELECT MAX(id) FROM paper_portfolio);
-                    """, (payment, payment, payment, now_str))
-
                     pending_payments.append((pos, payment, strat_id, sym, f_rate, sett_time_dt))
+                    total_funding_payment += payment
                     settlements_applied += 1
 
+            if settlements_applied > 0:
+                new_cash = self.portfolio["cash_balance"] + total_funding_payment
+                new_equity = self.portfolio["equity"] + total_funding_payment
+                new_peak = max(self.portfolio["peak_equity"], new_equity)
+                new_drawdown = ((new_peak - new_equity) / new_peak * 100.0) if new_peak > 0 else 0.0
+
+                # Section B: Single transaction includes portfolio snapshot
+                conn.execute("""
+                INSERT INTO paper_portfolio (
+                    timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+                    margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    now_str,
+                    round(new_cash, 2),
+                    round(new_equity, 2),
+                    round(self.portfolio["realized_pnl"], 2),
+                    round(self.portfolio["unrealized_pnl"], 2),
+                    round(self.portfolio["margin_used"], 2),
+                    round(new_peak, 2),
+                    round(new_drawdown, 2),
+                    round(self.portfolio.get("gross_leverage", 0.0), 2),
+                    round(self.portfolio.get("net_leverage", 0.0), 2)
+                ))
             conn.commit()
 
-        # Issue 6: Update in-memory state ONLY AFTER successful database commit
-        for pos, payment, strat_id, sym, f_rate, sett_time_dt in pending_payments:
-            pos["accumulated_funding"] += payment
-            self.portfolio["cash_balance"] += payment
-            self.portfolio["equity"] += payment
+        # Issue 6 & Section B: Update in-memory state ONLY AFTER successful database commit
+        if settlements_applied > 0:
+            self.portfolio["cash_balance"] += total_funding_payment
+            self.portfolio["equity"] += total_funding_payment
             if self.portfolio["equity"] > self.portfolio["peak_equity"]:
                 self.portfolio["peak_equity"] = self.portfolio["equity"]
+            peak = self.portfolio["peak_equity"]
+            self.portfolio["drawdown_pct"] = ((peak - self.portfolio["equity"]) / peak * 100.0) if peak > 0 else 0.0
+
+        for pos, payment, strat_id, sym, f_rate, sett_time_dt in pending_payments:
+            pos["accumulated_funding"] += payment
             logger.info(f"[{strat_id}] Funding Applied to {sym} ({pos['side']}): ${payment:+.4f} (Rate: {f_rate:.6f}, Settlement: {sett_time_dt.isoformat()})")
 
-        if settlements_applied > 0:
-            self.save_portfolio_snapshot()
         return settlements_applied
