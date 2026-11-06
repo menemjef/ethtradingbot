@@ -35,6 +35,7 @@ plus symbol-agnostic execution:
 
 import os
 import sys
+import copy
 import json
 import math
 import tempfile
@@ -886,6 +887,165 @@ class TestBacktestEngineValidation(unittest.TestCase):
         r_seed_2 = compute_reconciled_trade_metrics(tr_repro, n_bootstraps=200, seed=999)
         with self.assertRaises(AssertionError):
             self.assertEqual(r_seed_1["ci_95_expectancy_bps"], r_seed_2["ci_95_expectancy_bps"])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ITEM 13: STORED FOLD METRICS vs EXPERIMENT REGISTRY SHARED METRIC AGREEMENT
+    # ─────────────────────────────────────────────────────────────────────────
+    def _assert_fold_metrics_and_registry_agree(self, p21: dict, reg: dict) -> None:
+        oos = p21["pooled_oos_summary"]
+        holdout = p21["holdout_summary"]
+        per_fold = p21["per_fold_metrics"]
+
+        exp_to_strategy = {
+            "EXP-20-CANDIDATE-A": "Exp1_Momentum_Continuation_4H",
+            "EXP-21-DONCHIAN-TURTLE": "Exp1_Donchian_55_Turtle_4H",
+            "EXP-22-PULLBACK-TREND": "Exp1_Pullback_Trend_4H",
+            "EXP-23-SR-BREAKOUT": "Exp1_SR_Breakout_Retest_4H",
+            "EXP-24-REGIME3-GATED": "Exp2_Gated_Trend_Regime3",
+            "EXP-25-COMPRESSION-EXP": "Exp2_Compression_Breakout_Regime1_to_2",
+            "EXP-26-COMBO-REGIME": "Phase4_Combo_Regime_Selector",
+            "EXP-30-WF-CANDIDATE-A": "Exp1_Momentum_Continuation_4H",
+            "EXP-31-WF-DONCHIAN-120H": "Trend_Donchian_120h",
+            "EXP-32-WF-DONCHIAN-168H": "Trend_Donchian_168h",
+            "EXP-41-CANDIDATE-A-ATTRIBUTION": "Exp1_Momentum_Continuation_4H",
+        }
+
+        exp_by_id = {}
+        for phase in reg["phases"]:
+            for exp in phase["experiments"]:
+                exp_by_id[exp["id"]] = exp
+
+        for exp_id, strat_key in exp_to_strategy.items():
+            self.assertIn(exp_id, exp_by_id, f"Missing {exp_id} in experiment_registry.json")
+            self.assertIn(strat_key, oos, f"Missing {strat_key} in phase_2_1_fold_metrics.json")
+            metrics = exp_by_id[exp_id].get("metrics", {})
+            self.assertTrue(len(metrics) > 0, f"{exp_id} has no metrics block")
+
+            s_oos = oos[strat_key]
+            s_ts = s_oos["trade_summary"]
+            s_ho = holdout[strat_key]
+            s_ho_ts = s_ho["trade_summary"]
+
+            # Trade count
+            self.assertIn("oos_total_trades", metrics, f"{exp_id} missing oos_total_trades")
+            self.assertEqual(
+                int(metrics["oos_total_trades"]),
+                int(s_ts["total_trades"]),
+                f"{exp_id} trade count mismatch",
+            )
+
+            # Expectancy
+            self.assertIn("oos_expectancy_bps", metrics, f"{exp_id} missing oos_expectancy_bps")
+            self.assertAlmostEqual(
+                float(metrics["oos_expectancy_bps"]),
+                float(s_ts["expectancy_bps"]),
+                places=2,
+                msg=f"{exp_id} oos_expectancy_bps mismatch",
+            )
+            if "phase_2_1_oos_expectancy_bps" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["phase_2_1_oos_expectancy_bps"]),
+                    float(s_ts["expectancy_bps"]),
+                    places=2,
+                    msg=f"{exp_id} phase_2_1_oos_expectancy_bps mismatch",
+                )
+
+            # Max drawdown
+            self.assertIn("oos_max_drawdown_pct", metrics, f"{exp_id} missing oos_max_drawdown_pct")
+            self.assertAlmostEqual(
+                float(metrics["oos_max_drawdown_pct"]),
+                float(s_oos["intratrade_max_drawdown_pct"]),
+                places=2,
+                msg=f"{exp_id} oos_max_drawdown_pct mismatch",
+            )
+            if "phase_2_1_oos_max_drawdown_pct" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["phase_2_1_oos_max_drawdown_pct"]),
+                    float(s_oos["intratrade_max_drawdown_pct"]),
+                    places=2,
+                    msg=f"{exp_id} phase_2_1_oos_max_drawdown_pct mismatch",
+                )
+
+            # Other shared metrics when present
+            if "oos_ci_95_expectancy_bps" in metrics:
+                self.assertEqual(
+                    [round(float(x), 2) for x in metrics["oos_ci_95_expectancy_bps"]],
+                    [round(float(x), 2) for x in s_ts["ci_95_expectancy_bps"]],
+                    f"{exp_id} oos_ci_95_expectancy_bps mismatch",
+                )
+            if "oos_win_rate_pct" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["oos_win_rate_pct"]),
+                    float(s_ts["win_rate_pct"]),
+                    places=2,
+                    msg=f"{exp_id} oos_win_rate_pct mismatch",
+                )
+            if "oos_profit_factor" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["oos_profit_factor"]),
+                    float(s_ts["profit_factor"]),
+                    places=3,
+                    msg=f"{exp_id} oos_profit_factor mismatch",
+                )
+            if "holdout_total_trades" in metrics:
+                self.assertEqual(
+                    int(metrics["holdout_total_trades"]),
+                    int(s_ho_ts["total_trades"]),
+                    f"{exp_id} holdout_total_trades mismatch",
+                )
+            if "holdout_expectancy_bps" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["holdout_expectancy_bps"]),
+                    float(s_ho_ts["expectancy_bps"]),
+                    places=2,
+                    msg=f"{exp_id} holdout_expectancy_bps mismatch",
+                )
+            if "holdout_max_drawdown_pct" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["holdout_max_drawdown_pct"]),
+                    float(s_ho["intratrade_max_drawdown_pct"]),
+                    places=2,
+                    msg=f"{exp_id} holdout_max_drawdown_pct mismatch",
+                )
+            if "fold_4_max_drawdown_pct" in metrics:
+                self.assertAlmostEqual(
+                    float(metrics["fold_4_max_drawdown_pct"]),
+                    float(per_fold[strat_key]["4"]["intratrade_max_drawdown_pct"]),
+                    places=2,
+                    msg=f"{exp_id} fold_4_max_drawdown_pct mismatch",
+                )
+
+    def test_13_stored_fold_metrics_and_experiment_registry_agreement(self):
+        """
+        Fails if the stored research/phase_2_1_fold_metrics.json and
+        research/experiment_registry.json disagree on any shared metric
+        (trade count, expectancy, max drawdown, win rate, profit factor, etc.).
+        """
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        reg_path = os.path.join(base_dir, "research", "experiment_registry.json")
+        p21_path = os.path.join(base_dir, "research", "phase_2_1_fold_metrics.json")
+
+        with open(reg_path, "r", encoding="utf-8") as f:
+            reg = json.load(f)
+        with open(p21_path, "r", encoding="utf-8") as f:
+            p21 = json.load(f)
+
+        # 1. Stored artifacts must agree on every shared metric
+        self._assert_fold_metrics_and_registry_agree(p21, reg)
+
+        # 2. Mutation checks: perturbing trade count, expectancy, or max drawdown must fail
+        for field, bad_val in [
+            ("oos_total_trades", 999),
+            ("oos_expectancy_bps", -999.0),
+            ("oos_max_drawdown_pct", 99.99),
+        ]:
+            mut_reg = copy.deepcopy(reg)
+            for phase in mut_reg["phases"]:
+                for exp in phase["experiments"]:
+                    if exp["id"] == "EXP-30-WF-CANDIDATE-A":
+                        exp["metrics"][field] = bad_val
+            with self.assertRaises(AssertionError):
+                self._assert_fold_metrics_and_registry_agree(p21, mut_reg)
 
 
 if __name__ == "__main__":

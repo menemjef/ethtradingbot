@@ -1,7 +1,7 @@
 {
   "project": "ETH/USDT Perpetual Futures Quantitative Research",
   "repository": "menemjef/ethtradingbot",
-  "working_branch": "fix/execution-safety-and-backtest-integrity",
+  "working_branch": "audit/backtest-engine-validation",
   "multiple_testing_accounting": {
     "total_trials_evaluated_K": 32,
     "methodology": "Bailey & Lopez de Prado (2014) Deflated Sharpe Ratio + Bailey et al. (2016) Combinatorially Symmetric Cross-Validation (CSCV) PBO",
@@ -13,7 +13,7 @@
       "research/phase_2_1_candidate_comparison.md",
       "research/swing_strategy_metrics.json"
     ],
-    "donchian_discrepancy_explanation": "Earlier versions of generate_experiment_registry.py contained hardcoded static strings that misattributed unverified pre-repair numbers (-34.6 bps / -22.4% DD for Trend_Donchian_120h and -61.2 bps / -34.8% DD for Trend_Donchian_168h) and mislisted parameters as {'stop_loss': '2.0 * ATR', 'take_profit': 'None (Trailing)'}. The actual Phase 2.1 purged walk-forward engine (run_phase_2_1_research.py) uses {'stop_loss': '2.5 * ATR_14', 'take_profit': '4.0 * ATR_14', 'exit_type': 'fixed_atr'} and produced +1.01 bps pooled OOS expectancy (20.42% OOS MaxDD, -24.92 bps Holdout Fold 5) for Trend_Donchian_120h and +74.40 bps pooled OOS expectancy (23.94% OOS MaxDD, -8.08 bps Holdout Fold 5) for Trend_Donchian_168h, matching phase_2_1_candidate_comparison.md (+1.0 bps and +74.4 bps)."
+    "donchian_discrepancy_explanation": "Earlier versions of generate_experiment_registry.py contained hardcoded static strings that misattributed unverified pre-repair numbers (-34.6 bps / -22.4% DD for Trend_Donchian_120h and -61.2 bps / -34.8% DD for Trend_Donchian_168h) and mislisted parameters as {'stop_loss': '2.0 * ATR', 'take_profit': 'None (Trailing)'}. The actual Phase 2.1 purged walk-forward engine (run_phase_2_1_research.py) uses {'stop_loss': '2.5 * ATR_14', 'take_profit': '4.0 * ATR_14', 'exit_type': 'fixed_atr'} and produced +1.01 bps pooled OOS expectancy (20.62% OOS MaxDD, 36.73 bps / -1.11% CAGR Holdout Fold 5) for Trend_Donchian_120h and +74.40 bps pooled OOS expectancy (24.06% OOS MaxDD, -8.11 bps / -2.99% CAGR Holdout Fold 5) for Trend_Donchian_168h, matching phase_2_1_candidate_comparison.md (+1.0 bps and +74.4 bps)."
   },
   "phases": [
     {
@@ -108,7 +108,24 @@
             "phase_2_profit_factor": 1.318,
             "phase_2_1_oos_expectancy_bps": 135.35,
             "phase_2_1_oos_win_rate_pct": 53.57,
-            "phase_2_1_oos_profit_factor": 1.859
+            "phase_2_1_oos_profit_factor": 1.859,
+            "strategy_key": "Exp1_Momentum_Continuation_4H",
+            "oos_total_trades": 28,
+            "oos_expectancy_bps": 135.35,
+            "oos_ci_95_expectancy_bps": [
+              35.18,
+              314.88
+            ],
+            "oos_win_rate_pct": 53.57,
+            "oos_profit_factor": 1.859,
+            "oos_max_drawdown_pct": 4.94,
+            "oos_calendar_cagr_pct": 5.01,
+            "oos_daily_sharpe": 0.769,
+            "oos_deflated_sharpe_ratio": 0.1777,
+            "holdout_total_trades": 9,
+            "holdout_expectancy_bps": 103.91,
+            "holdout_max_drawdown_pct": 3.45,
+            "holdout_calendar_cagr_pct": 11.1
           },
           "status": "RETAINED_FOR_FURTHER_AUDIT",
           "reason_for_status": "Produced positive Phase 2 expectancy (+53.08 bps, 52.27% win rate, 1.32 PF) and +135.3 bps pooled OOS expectancy in Phase 2.1. Low trade frequency (~12/yr) and failure of multi-trial DSR under K=32 prevented immediate live promotion."
@@ -133,10 +150,27 @@
             "phase_2_expectancy_bps": -31.36,
             "phase_2_win_rate_pct": 37.02,
             "phase_2_1_oos_expectancy_bps": 24.01,
-            "phase_2_1_oos_max_drawdown_pct": 12.03
+            "phase_2_1_oos_max_drawdown_pct": 12.25,
+            "strategy_key": "Exp1_Donchian_55_Turtle_4H",
+            "oos_total_trades": 145,
+            "oos_expectancy_bps": 24.01,
+            "oos_ci_95_expectancy_bps": [
+              -28.46,
+              80.57
+            ],
+            "oos_win_rate_pct": 35.86,
+            "oos_profit_factor": 1.226,
+            "oos_max_drawdown_pct": 12.25,
+            "oos_calendar_cagr_pct": 9.46,
+            "oos_daily_sharpe": 0.84,
+            "oos_deflated_sharpe_ratio": 0.2043,
+            "holdout_total_trades": 27,
+            "holdout_expectancy_bps": -29.86,
+            "holdout_max_drawdown_pct": 6.1,
+            "holdout_calendar_cagr_pct": -9.46
           },
           "status": "REJECTED",
-          "reason_for_status": "Excessive whipsaws in sideways regimes. Phase 2 win rate was 37.02% with -31.36 bps expectancy (Phase 2.1 OOS: +24.01 bps, MaxDD 12.03%)."
+          "reason_for_status": "Excessive whipsaws in sideways regimes. Phase 2 win rate was 37.02% with -31.36 bps expectancy (Phase 2.1 OOS: +24.01 bps, MaxDD 12.25%)."
         },
         {
           "id": "EXP-22-PULLBACK-TREND",
@@ -156,7 +190,24 @@
           "metrics": {
             "phase_2_expectancy_bps": -40.49,
             "phase_2_profit_factor": 0.741,
-            "phase_2_1_oos_expectancy_bps": -56.92
+            "phase_2_1_oos_expectancy_bps": -56.92,
+            "strategy_key": "Exp1_Pullback_Trend_4H",
+            "oos_total_trades": 103,
+            "oos_expectancy_bps": -56.92,
+            "oos_ci_95_expectancy_bps": [
+              -116.91,
+              12.11
+            ],
+            "oos_win_rate_pct": 33.01,
+            "oos_profit_factor": 0.682,
+            "oos_max_drawdown_pct": 52.25,
+            "oos_calendar_cagr_pct": -23.86,
+            "oos_daily_sharpe": -1.242,
+            "oos_deflated_sharpe_ratio": 0.0,
+            "holdout_total_trades": 26,
+            "holdout_expectancy_bps": 56.83,
+            "holdout_max_drawdown_pct": 9.36,
+            "holdout_calendar_cagr_pct": 44.56
           },
           "status": "REJECTED",
           "reason_for_status": "Premature stopouts on volatile ETH wicks. Phase 2 profit factor 0.74, expectancy -40.49 bps (Phase 2.1 OOS: -56.92 bps)."
@@ -178,7 +229,24 @@
           "trials_evaluated": 4,
           "metrics": {
             "phase_2_expectancy_bps": -34.93,
-            "phase_2_1_oos_expectancy_bps": -21.55
+            "phase_2_1_oos_expectancy_bps": -21.55,
+            "strategy_key": "Exp1_SR_Breakout_Retest_4H",
+            "oos_total_trades": 182,
+            "oos_expectancy_bps": -21.55,
+            "oos_ci_95_expectancy_bps": [
+              -94.73,
+              43.01
+            ],
+            "oos_win_rate_pct": 42.31,
+            "oos_profit_factor": 0.9,
+            "oos_max_drawdown_pct": 36.03,
+            "oos_calendar_cagr_pct": -4.3,
+            "oos_daily_sharpe": -0.095,
+            "oos_deflated_sharpe_ratio": 0.0124,
+            "holdout_total_trades": 32,
+            "holdout_expectancy_bps": -18.02,
+            "holdout_max_drawdown_pct": 15.21,
+            "holdout_calendar_cagr_pct": -14.69
           },
           "status": "REJECTED",
           "reason_for_status": "Breakouts frequently reversed in choppy conditions: Phase 2 expectancy -34.93 bps, Phase 2.1 OOS expectancy -21.55 bps."
@@ -200,7 +268,24 @@
           "trials_evaluated": 4,
           "metrics": {
             "phase_2_expectancy_bps": -75.76,
-            "phase_2_1_oos_expectancy_bps": -60.19
+            "phase_2_1_oos_expectancy_bps": -60.19,
+            "strategy_key": "Exp2_Gated_Trend_Regime3",
+            "oos_total_trades": 84,
+            "oos_expectancy_bps": -60.19,
+            "oos_ci_95_expectancy_bps": [
+              -154.35,
+              49.52
+            ],
+            "oos_win_rate_pct": 41.67,
+            "oos_profit_factor": 0.757,
+            "oos_max_drawdown_pct": 25.76,
+            "oos_calendar_cagr_pct": -5.49,
+            "oos_daily_sharpe": -0.314,
+            "oos_deflated_sharpe_ratio": 0.005,
+            "holdout_total_trades": 13,
+            "holdout_expectancy_bps": -222.57,
+            "holdout_max_drawdown_pct": 18.22,
+            "holdout_calendar_cagr_pct": -28.75
           },
           "status": "REJECTED",
           "reason_for_status": "Lagging ADX indicator entered trends late near exhaustion points. Phase 2.1 OOS expectancy -60.19 bps (Phase 2 full-period: +-75.76 bps)."
@@ -222,7 +307,24 @@
           "trials_evaluated": 4,
           "metrics": {
             "phase_2_expectancy_bps": 9.36,
-            "phase_2_1_oos_expectancy_bps": 14.69
+            "phase_2_1_oos_expectancy_bps": 14.69,
+            "strategy_key": "Exp2_Compression_Breakout_Regime1_to_2",
+            "oos_total_trades": 44,
+            "oos_expectancy_bps": 14.69,
+            "oos_ci_95_expectancy_bps": [
+              -116.25,
+              127.22
+            ],
+            "oos_win_rate_pct": 40.91,
+            "oos_profit_factor": 1.079,
+            "oos_max_drawdown_pct": 16.59,
+            "oos_calendar_cagr_pct": 1.93,
+            "oos_daily_sharpe": 0.214,
+            "oos_deflated_sharpe_ratio": 0.0369,
+            "holdout_total_trades": 17,
+            "holdout_expectancy_bps": -7.07,
+            "holdout_max_drawdown_pct": 16.64,
+            "holdout_calendar_cagr_pct": -5.27
           },
           "status": "REJECTED",
           "reason_for_status": "High false breakout rate in ETH compression phases. Phase 2 expectancy 9.36 bps, Phase 2.1 OOS expectancy 14.69 bps."
@@ -245,10 +347,27 @@
           "trials_evaluated": 5,
           "metrics": {
             "phase_2_expectancy_bps": -54.84,
-            "phase_2_1_oos_expectancy_bps": -9.54
+            "phase_2_1_oos_expectancy_bps": -9.54,
+            "strategy_key": "Phase4_Combo_Regime_Selector",
+            "oos_total_trades": 92,
+            "oos_expectancy_bps": -9.54,
+            "oos_ci_95_expectancy_bps": [
+              -54.41,
+              41.18
+            ],
+            "oos_win_rate_pct": 28.26,
+            "oos_profit_factor": 0.901,
+            "oos_max_drawdown_pct": 12.58,
+            "oos_calendar_cagr_pct": -1.18,
+            "oos_daily_sharpe": -0.107,
+            "oos_deflated_sharpe_ratio": 0.0126,
+            "holdout_total_trades": 26,
+            "holdout_expectancy_bps": -6.63,
+            "holdout_max_drawdown_pct": 9.0,
+            "holdout_calendar_cagr_pct": -7.11
           },
           "status": "REJECTED",
-          "reason_for_status": "Did not outperform individual components; high drawdowns in choppy transition months. Phase 2.1 OOS expectancy -9.54 bps (MaxDD 12.47%)."
+          "reason_for_status": "Did not outperform individual components; high drawdowns in choppy transition months. Phase 2.1 OOS expectancy -9.54 bps (MaxDD 12.58%)."
         }
       ]
     },
@@ -278,18 +397,26 @@
           },
           "trials_evaluated": 1,
           "metrics": {
+            "strategy_key": "Exp1_Momentum_Continuation_4H",
+            "oos_total_trades": 28,
             "oos_expectancy_bps": 135.35,
             "oos_ci_95_expectancy_bps": [
-              29.88,
-              324.71
+              35.18,
+              314.88
             ],
             "oos_win_rate_pct": 53.57,
             "oos_profit_factor": 1.859,
-            "oos_max_drawdown_pct": 4.74,
-            "holdout_expectancy_bps": 103.91
+            "oos_max_drawdown_pct": 4.94,
+            "oos_calendar_cagr_pct": 5.01,
+            "oos_daily_sharpe": 0.769,
+            "oos_deflated_sharpe_ratio": 0.1777,
+            "holdout_total_trades": 9,
+            "holdout_expectancy_bps": 103.91,
+            "holdout_max_drawdown_pct": 3.45,
+            "holdout_calendar_cagr_pct": 11.1
           },
           "status": "RETAINED",
-          "reason_for_status": "CONFIRMED EDGE: Produced +135.3 bps pooled OOS expectancy (95% CI: [+29.9, +324.7] bps), 53.6% OOS win rate (56.8% across all 5 folds), and +103.9 bps on final Holdout Fold 5."
+          "reason_for_status": "CONFIRMED EDGE: Produced +135.3 bps pooled OOS expectancy (95% CI: [+35.2, +314.9] bps), 53.6% OOS win rate (56.8% across all 5 folds), OOS MaxDD 4.94%, and +103.9 bps on Holdout Fold 5."
         },
         {
           "id": "EXP-31-WF-DONCHIAN-120H",
@@ -308,19 +435,27 @@
           },
           "trials_evaluated": 1,
           "metrics": {
+            "strategy_key": "Trend_Donchian_120h",
+            "oos_total_trades": 54,
             "oos_expectancy_bps": 1.01,
             "oos_ci_95_expectancy_bps": [
-              -158.13,
-              185.85
+              -143.77,
+              172.55
             ],
             "oos_win_rate_pct": 40.74,
             "oos_profit_factor": 1.004,
-            "oos_max_drawdown_pct": 20.42,
-            "fold_4_max_drawdown_pct": 13.44,
-            "holdout_expectancy_bps": 36.73
+            "oos_max_drawdown_pct": 20.62,
+            "oos_calendar_cagr_pct": 0.04,
+            "oos_daily_sharpe": 0.067,
+            "oos_deflated_sharpe_ratio": 0.0228,
+            "holdout_total_trades": 10,
+            "holdout_expectancy_bps": 36.73,
+            "holdout_max_drawdown_pct": 7.46,
+            "holdout_calendar_cagr_pct": -1.11,
+            "fold_4_max_drawdown_pct": 13.65
           },
           "status": "REJECTED",
-          "reason_for_status": "Near-zero pooled OOS expectancy (+1.0 bps, 95% CI: [-158.1, +185.8] bps), excessive OOS max drawdown (20.42%, Fold 4 DD 13.44%), and negative Holdout Fold 5 expectancy (36.7 bps)."
+          "reason_for_status": "Near-zero pooled OOS expectancy (+1.0 bps, 95% CI: [-143.8, +172.6] bps), excessive OOS max drawdown (20.62%, Fold 4 DD 13.65%), and negative Holdout Fold 5 CAGR (-1.11%, trade exp +36.7 bps)."
         },
         {
           "id": "EXP-32-WF-DONCHIAN-168H",
@@ -339,6 +474,8 @@
           },
           "trials_evaluated": 1,
           "metrics": {
+            "strategy_key": "Trend_Donchian_168h",
+            "oos_total_trades": 50,
             "oos_expectancy_bps": 74.4,
             "oos_ci_95_expectancy_bps": [
               -126.57,
@@ -346,11 +483,17 @@
             ],
             "oos_win_rate_pct": 48.0,
             "oos_profit_factor": 1.272,
-            "oos_max_drawdown_pct": 23.94,
-            "holdout_expectancy_bps": -8.11
+            "oos_max_drawdown_pct": 24.06,
+            "oos_calendar_cagr_pct": 3.71,
+            "oos_daily_sharpe": 0.342,
+            "oos_deflated_sharpe_ratio": 0.0576,
+            "holdout_total_trades": 9,
+            "holdout_expectancy_bps": -8.11,
+            "holdout_max_drawdown_pct": 9.22,
+            "holdout_calendar_cagr_pct": -2.99
           },
           "status": "REJECTED",
-          "reason_for_status": "Positive pooled OOS expectancy (+74.4 bps) fails statistical significance (95% CI: [-126.6, +296.4] bps), suffers severe OOS max drawdown (23.94% > 15% limit), and degrades to negative expectancy (-8.1 bps) on Holdout Fold 5."
+          "reason_for_status": "Positive pooled OOS expectancy (+74.4 bps) fails statistical significance (95% CI: [-126.6, +296.4] bps), suffers severe OOS max drawdown (24.06% > 15% limit), and degrades to negative expectancy (-8.1 bps) on Holdout Fold 5."
         }
       ]
     },
@@ -358,7 +501,7 @@
       "phase_id": "Phase 2.2A",
       "title": "Statistical Audit & Candidate A Edge Attribution",
       "period": "2026-11",
-      "data_scope": "Mathematical audit of quant_evaluation.py + Attribution analysis of 37 walk-forward Candidate A trades",
+      "data_scope": "Mathematical audit of quant_evaluation.py + Attribution analysis of 28 Walk-Forward OOS Candidate A trades (Folds 1-4, include_holdout=False)",
       "experiments": [
         {
           "id": "EXP-40-STAT-AUDIT",
@@ -381,7 +524,7 @@
           },
           "trials_evaluated": 1,
           "status": "CONFIRMED_AND_MERGED",
-          "reason_for_status": "All 80 regression tests pass. DSR correctly distinguishes true skill from luck under K=32; CSCV ranks candidates via risk-adjusted Sharpe; bootstrap preserves exact N observations."
+          "reason_for_status": "All regression tests pass. DSR correctly distinguishes true skill from luck under K=32; CSCV ranks candidates via risk-adjusted Sharpe; bootstrap preserves exact N observations."
         },
         {
           "id": "EXP-41-CANDIDATE-A-ATTRIBUTION",
@@ -397,11 +540,18 @@
             "MFE/MAE"
           ],
           "parameters": {
-            "frozen_rules": true
+            "frozen_rules": true,
+            "include_holdout": false
           },
           "trials_evaluated": 1,
+          "metrics": {
+            "oos_total_trades": 28,
+            "oos_win_rate_pct": 53.57,
+            "oos_expectancy_bps": 135.35,
+            "oos_max_drawdown_pct": 4.94
+          },
           "status": "ANALYSIS_COMPLETE",
-          "reason_for_status": "Discovered that 84.6% of profits originate from Short trades ($1,618.80) and 68.9% from Regime 3 trends ($1,318.01). First-12-hour return is an almost perfect predictor (80.95% win rate and 16.05 PF when positive at 12h vs 25% win rate and 0.30 PF when negative)."
+          "reason_for_status": "On Walk-Forward OOS Folds 1-4 (28 trades, include_holdout=False), Short trades contributed 78.3% of profits ($1,007.30 of $1,286.76) and Regime 3 trends contributed 93.9% ($1,207.86, +239.7 bps expectancy, 2.75 PF). First-12-hour return strongly bifurcates OOS outcomes (76.47% win rate and 13.66 PF when positive at 12h vs 18.18% win rate and 0.28 PF when negative)."
         }
       ]
     }

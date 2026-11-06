@@ -1589,9 +1589,9 @@ Evaluation window: **2023-09-08 to 2026-03-31** (~2.57 calendar years, 21,960 ho
 
 ---
 
-## 3. Strictly Untouched Final Holdout Verification (Fold 5)
+## 3. Final Holdout Verification — Fold 5 (HOLDOUT ALREADY USED, NOT UNTOUCHED)
 
-Evaluation window: **2026-04-08 to 2026-11-04** (~7 months, 5,059 hours). This slice was completely excluded from all research exploration and hyperparameter design.
+Evaluation window: **2026-04-08 to 2026-11-04** (~7 months, 5,059 hours). **HOLDOUT ALREADY USED, NOT UNTOUCHED:** Although separated from Fold 4 by a 168-hour purge boundary, this time window was previously included in Phase 2 full-sample exploration (`run_swing_research.py`) and initial Phase 2.2A attribution, and is therefore reported separately here as a contaminated holdout slice.
 
 | Metric | Candidate A (Momentum 4H) | Candidate B (Donchian 120h) | Candidate C (Donchian 168h) | Buy & Hold ETH |
 | :--- | :---: | :---: | :---: | :---: |
@@ -1745,7 +1745,7 @@ def write_audit_findings_report(
 | Defect Area | Prior Defect State | Implemented Resolution | Verification Test |
 | :--- | :--- | :--- | :--- |
 | **1. Walk-Forward Evaluation** | Runner constructed fold boundaries but executed full-sample historical testing over the entire 3.75-year dataset. | Replaced with true fold execution across 5 chronological partitions. Positions forced closed at boundaries; 168-hour purge window enforced. | `test_04_walk_forward_evaluation_and_purge_boundary` |
-| **2. Funding Alignment** | Looked up settlements via exact string matching against microsecond timestamps (`...020000+00:00`), dropping 100% of funding records silently. | Normalized index to nearest UTC hour (`index.round('h')`). Reconciled 4,090 settlements with zero dropped events; enforced correct perpetual sign convention ($C = \\text{{side}} \\times F$). | `test_01_funding_timestamp_normalization_and_settlement_reconciliation` |
+| **2. Funding Alignment** | Looked up settlements via exact string matching without hour-rounding, matching 2,630/4,090 (64.30%) and missing 1,460/4,090 (35.70%) of sub-second funding records (`...020000+00:00`), understating funding cost for net-long strategies. | Normalized index to nearest UTC hour (`index.round('h')`). Reconciled 4,090/4,090 (100.00%) settlements with zero dropped events; enforced correct perpetual sign convention ($C = \\text{{side}} \\times F$). | `test_01_funding_timestamp_normalization_and_settlement_reconciliation` |
 | **3. Intrabar Execution & Slippage** | Entry-bar SL/TP hits were ignored; same-bar collisions lacked stop-first priority; opening gaps filled at SL; trailing stops suffered intra-bar lookahead. | Added immediate entry-bar check; enforced STOP-FIRST collision rule; executed gap down at Open; made trailing stop causal to prior confirmed bars; tracked lowest-tick equity. | `test_02_conservative_intrabar_execution`, `test_03_trailing_stop_causality` |
 | **4. Volatility Prediction** | Computed 70th percentile threshold across the full sample (lookahead bias); included incomplete forward horizons. | Implemented rolling 168-bar historical 70th percentile of realized volatility ($RV_{{t,h}} = \\sqrt{{\\sum r^2}}$); excluded incomplete horizons; added Wilson score 95% CIs. | `test_05_rolling_volatility_prediction_no_lookahead` |
 | **5. Statistical Validation** | CSCV PBO used first 200 lexicographical combinations; Nov 2026 partial month distorted statistics. | Implemented uniform random sampling / exhaustive evaluation for CSCV PBO; marked incomplete final month as `2026-11 (MTD)` and excluded from completed stats. | `test_06_cscv_pbo_and_mtd_month_handling` |
