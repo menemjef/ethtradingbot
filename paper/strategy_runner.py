@@ -548,7 +548,11 @@ class CandidateAPaperRunner:
             else:
                 funding_bound_ms = int(time.time() * 1000)
 
-            self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=funding_bound_ms)
+            try:
+                self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=funding_bound_ms)
+            except Exception as e:
+                logger.error(f"Error applying funding rates on live tick: {e}")
+
             self.exec_engine.update_mark_to_market(quotes)
 
             # Protect existing position using fresh live quotes
@@ -586,8 +590,27 @@ class CandidateAPaperRunner:
                             symbol=self.symbol,
                             exit_reason=trigger_reason,
                             quote=quote,
+                            exit_time_str=now_str,
                             quotes=quotes
                         )
+                    else:
+                        # Check live 72-hour maximum holding horizon expiry
+                        t_ent = datetime.fromisoformat(pos["entry_time"])
+                        if t_ent.tzinfo is None:
+                            t_ent = t_ent.replace(tzinfo=timezone.utc)
+                        t_now = datetime.now(timezone.utc)
+                        hours_held = (t_now - t_ent).total_seconds() / 3600.0
+                        if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                            self.exec_engine.close_position(
+                                strategy_id=self.strategy_id,
+                                symbol=self.symbol,
+                                exit_reason="horizon_expiry",
+                                quote=quote,
+                                exit_time_str=now_str,
+                                quotes=quotes
+                            )
+                except StaleQuoteError as e:
+                    logger.warning(f"Could not manage position with live quote: {e}")
                 except Exception as e:
                     logger.error(f"Error managing position with live quote: {e}")
             return

@@ -1332,7 +1332,7 @@ class PaperExecutionEngine:
 
         now_str = datetime.now(timezone.utc).isoformat()
 
-        if not os.path.exists(self.market_db_path) or not self.active_positions:
+        if not self.active_positions:
             if processed_candle_info:
                 with self._get_connection() as conn:
                     conn.execute("""
@@ -1348,6 +1348,10 @@ class PaperExecutionEngine:
                     ))
                     conn.commit()
             return 0
+
+        if not os.path.exists(self.market_db_path):
+            logger.error(f"Could not read funding_settlements: market_data.db not found at {self.market_db_path}")
+            raise FileNotFoundError(f"Market database not found at {self.market_db_path}")
 
         settlements_applied = 0
 
@@ -1361,21 +1365,7 @@ class PaperExecutionEngine:
                 settlement_rows = m_cur.fetchall()
         except Exception as e:
             logger.error(f"Could not read funding_settlements from market_data.db: {e}")
-            if processed_candle_info:
-                with self._get_connection() as conn:
-                    conn.execute("""
-                    INSERT OR IGNORE INTO processed_1m_candles (
-                        strategy_id, symbol, open_time, close_time, processed_at
-                    ) VALUES (?, ?, ?, ?, ?);
-                    """, (
-                        processed_candle_info["strategy_id"],
-                        processed_candle_info["symbol"],
-                        int(processed_candle_info["open_time"]),
-                        int(processed_candle_info["close_time"]),
-                        processed_candle_info.get("processed_at", now_str)
-                    ))
-                    conn.commit()
-            return 0
+            raise
 
         pending_payments = []
         total_funding_payment = 0.0

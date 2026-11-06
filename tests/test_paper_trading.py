@@ -37,6 +37,7 @@ import shutil
 import unittest
 import unittest.mock
 from datetime import datetime, timezone, timedelta
+from contextlib import closing
 import pandas as pd
 import numpy as np
 
@@ -3358,6 +3359,116 @@ class TestPaperTradingInfrastructure(unittest.TestCase):
         # Attempting operation on closed connection must fail
         with self.assertRaises(sqlite3.ProgrammingError):
             c.execute("SELECT 1")
+
+    # -------------------------------------------------------------------------
+    # Test 61: Live 72h Horizon Expiry & Stale Quote Handling During Gap Halt
+    # -------------------------------------------------------------------------
+    def test_61_live_horizon_expiry_and_gap_halted_stale_quote_handling(self):
+        """Test 61: Verify live-quote 72h horizon expiry closes position during gap_halted with fresh quote, and logs warning without closing on stale quote."""
+        m_db = os.path.join(self.test_dir, "test_market_61.db")
+        p_db = os.path.join(self.test_dir, "test_paper_61.db")
+        collector = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del collector
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=20000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        now_ms = int(time.time() * 1000)
+        entry_ms = now_ms - int(73 * 3600 * 1000)  # 73 hours ago (> 72h max holding horizon)
+        entry_iso = datetime.fromtimestamp(entry_ms / 1000.0, tz=timezone.utc).isoformat()
+        fresh_entry_quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+
+        engine.open_position(runner.strategy_id, "ETHUSDT", "LONG", 1.0, 2800.0, 3200.0, fresh_entry_quote, entry_time_str=entry_iso)
+        runner.gap_halted = True
+
+        # 1. Stale quote (> 5s old): must NOT close position and MUST log a warning
+        stale_quote = {"best_bid": 3010.0, "best_ask": 3010.0, "receipt_ts": now_ms - 30000}
+        with self.assertLogs("paper.strategy_runner", level="WARNING") as log_cm:
+            runner.process_incoming_market_tick({"ETHUSDT": stale_quote}, current_bar=None)
+        self.assertIn((runner.strategy_id, "ETHUSDT"), engine.active_positions)
+        self.assertTrue(any("Could not manage position with live quote" in msg for msg in log_cm.output))
+
+        # 2. Fresh quote (within SL/TP bounds so SL/TP do not trigger): must close via horizon_expiry even while gap_halted
+        fresh_live_quote = {"best_bid": 3010.0, "best_ask": 3010.0, "receipt_ts": int(time.time() * 1000)}
+        runner.process_incoming_market_tick({"ETHUSDT": fresh_live_quote}, current_bar=None)
+        self.assertNotIn((runner.strategy_id, "ETHUSDT"), engine.active_positions)
+
+        with engine._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT exit_reason, exit_price FROM paper_trades WHERE strategy_id = ?", (runner.strategy_id,))
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "horizon_expiry")
+
+    # -------------------------------------------------------------------------
+    # Test 62: Funding Read Failure Does Not Mark Candle Processed & Retries
+    # -------------------------------------------------------------------------
+    def test_62_funding_read_failure_does_not_mark_candle_processed_and_retries(self):
+        """Test 62: Verify funding_settlements read failure does not write processed_1m_candles marker and succeeds on retry with funding applied once."""
+        m_db = os.path.join(self.test_dir, "test_market_62.db")
+        p_db = os.path.join(self.test_dir, "test_paper_62.db")
+        collector = MarketDataCollector(symbols=["ETHUSDT"], db_path=m_db)
+        del collector
+
+        engine = PaperExecutionEngine(db_path=p_db, market_db_path=m_db, initial_capital=20000.0)
+        runner = CandidateAPaperRunner(execution_engine=engine, market_db_path=m_db, paper_db_path=p_db, symbol="ETHUSDT")
+
+        now_ms = int(time.time() * 1000)
+        entry_iso = datetime.fromtimestamp((now_ms - 60000) / 1000.0, tz=timezone.utc).isoformat()
+        quote = {"best_bid": 3000.0, "best_ask": 3000.0, "receipt_ts": now_ms}
+        engine.open_position(runner.strategy_id, "ETHUSDT", "LONG", 1.0, 2800.0, 3200.0, quote, entry_time_str=entry_iso)
+
+        sett_time = now_ms + 30000
+        with closing(sqlite3.connect(m_db)) as conn:
+            conn.execute(
+                "INSERT INTO funding_settlements (symbol, settlement_time, funding_rate, mark_price) VALUES ('ETHUSDT', ?, 0.0001, 3000.0)",
+                (sett_time,)
+            )
+            conn.commit()
+
+        bar = {
+            "symbol": "ETHUSDT",
+            "open_time": now_ms,
+            "close_time": now_ms + 59999,
+            "open": 3000.0,
+            "high": 3005.0,
+            "low": 2995.0,
+            "close": 3002.0
+        }
+
+        # Simulate funding_settlements read failure by temporarily renaming the table
+        with closing(sqlite3.connect(m_db)) as conn:
+            conn.execute("ALTER TABLE funding_settlements RENAME TO funding_settlements_temp")
+            conn.commit()
+
+        with self.assertRaises(sqlite3.OperationalError):
+            runner.process_incoming_market_tick({"ETHUSDT": quote}, current_bar=bar)
+
+        # Verify candle is NOT marked processed in DB or in memory, and funding is NOT applied
+        with engine._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM processed_1m_candles WHERE open_time = ?", (now_ms,))
+            self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute("SELECT COUNT(*) FROM position_funding_payments")
+            self.assertEqual(cur.fetchone()[0], 0)
+        self.assertNotEqual(runner.last_processed_1m_open_time.get("ETHUSDT"), now_ms)
+
+        # Restore table and retry the same candle
+        with closing(sqlite3.connect(m_db)) as conn:
+            conn.execute("ALTER TABLE funding_settlements_temp RENAME TO funding_settlements")
+            conn.commit()
+
+        runner.process_incoming_market_tick({"ETHUSDT": quote}, current_bar=bar)
+
+        # Verify candle is now marked processed and funding was applied once
+        with engine._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM processed_1m_candles WHERE open_time = ?", (now_ms,))
+            self.assertEqual(cur.fetchone()[0], 1)
+            cur.execute("SELECT COUNT(*) FROM position_funding_payments")
+            self.assertEqual(cur.fetchone()[0], 1)
+        self.assertEqual(runner.last_processed_1m_open_time.get("ETHUSDT"), now_ms)
+        self.assertAlmostEqual(engine.active_positions[(runner.strategy_id, "ETHUSDT")]["accumulated_funding"], -0.30, places=4)
 
 
 if __name__ == "__main__":
