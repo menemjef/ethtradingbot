@@ -148,5 +148,91 @@ class TestMarketNeutralStrategies(unittest.TestCase):
             self.assertLessEqual(data["funding"][s].index[-1], M.VAL_END)
 
 
+    def test_hedged_intrabar_wick_drawdown_near_zero(self):
+        """A perfectly hedged synthetic pair with a 10% intrabar wick must show near-zero drawdown."""
+        n_hours = 24 * 10
+        idx = pd.date_range("2020-01-01 00:00:00+00:00", periods=n_hours, freq="1h")
+        symbols = M.SYMBOLS
+
+        perp, spot, funding, eligibility = {}, {}, {}, {}
+        for s in symbols:
+            p_open = np.full(n_hours, 100.0)
+            p_high = np.full(n_hours, 100.0)
+            p_low = np.full(n_hours, 100.0)
+            p_close = np.full(n_hours, 100.0)
+
+            s_open = np.full(n_hours, 100.0)
+            s_high = np.full(n_hours, 100.0)
+            s_low = np.full(n_hours, 100.0)
+            s_close = np.full(n_hours, 100.0)
+
+            # Intrabar wick at hour 100: spot low = 90 (-10%), perp high = 110 (+10%), close remains 100
+            s_low[100] = 90.0
+            p_high[100] = 110.0
+
+            perp[s] = pd.DataFrame({"open": p_open, "high": p_high, "low": p_low, "close": p_close, "volume": 1000.0}, index=idx)
+            spot[s] = pd.DataFrame({"open": s_open, "high": s_high, "low": s_low, "close": s_close, "volume": 1000.0}, index=idx)
+            f_rates = np.zeros(n_hours)
+            f_rates[::8] = 0.0001
+            funding[s] = pd.Series(f_rates, index=idx)
+            eligibility[s] = idx[0]
+
+        data = {"perp": perp, "spot": spot, "funding": funding, "eligibility": eligibility}
+        res = M.simulate_n2(data, start_time=idx[0], end_time=idx[-1], fee=0.0)
+
+        eql = res["equity_low"]
+        peak = eql.cummax()
+        dd = (peak - eql) / peak
+        max_dd_pct = float(dd.max()) * 100.0
+
+        self.assertLess(max_dd_pct, 0.01, f"Expected near-zero drawdown, got {max_dd_pct}%")
+        self.assertIn("max_basis_stress_usd", res)
+
+    def test_near_constant_returns_returns_nan_and_flag(self):
+        """Near-constant return series must return NaN/None for Sharpe and DSR with near_constant_returns=True."""
+        from utils.quant_evaluation import compute_deflated_sharpe_ratio
+        n_days = 100
+        idx = pd.date_range("2021-01-01 00:00:00+00:00", periods=n_days * 24, freq="1h")
+        eq = pd.Series(10000.0 + np.linspace(0, 0.01, len(idx)), index=idx)
+        btc_eq = eq.copy()
+
+        fake_res = {
+            "strategy": "N2_Funding_Carry",
+            "split": "test",
+            "fee_per_side": 0.001,
+            "start": str(idx[0]),
+            "end": str(idx[-1]),
+            "equity": eq,
+            "equity_low": eq,
+            "funding_usd": 0.01,
+            "basis_pnl_usd": 0.0,
+            "fees_usd": 0.0,
+            "turnover_usd": 0.0,
+            "per_coin_pnl": {s: 0.0 for s in M.SYMBOLS},
+            "initial_equity": 10000.0,
+            "final_equity": 10000.01,
+            "eight_hour_returns": [0.0] * 50,
+            "max_basis_stress_usd": 0.0,
+        }
+
+        metrics = M.compute_strategy_metrics(fake_res, btc_eq, n_bootstraps=50)
+        self.assertTrue(metrics["near_constant_returns"])
+        self.assertIsNone(metrics["sharpe_rf4"])
+        self.assertIsNone(metrics["sharpe_zero"])
+        self.assertIsNone(metrics["dsr"])
+
+        # Directly test compute_deflated_sharpe_ratio
+        const_returns = np.full(100, 1e-7)
+        dsr_val = compute_deflated_sharpe_ratio(0.0, const_returns)
+        self.assertTrue(np.isnan(dsr_val))
+
+    def test_deflated_sharpe_ratio_positive_skew_mertens_expansion(self):
+        """Mertens expansion var_term <= 0 under high Sharpe and positive skew must return 1.0 (not 0.0)."""
+        from utils.quant_evaluation import compute_deflated_sharpe_ratio
+        rets = np.array([0.0001] * 700 + [0.01] * 30)
+        dsr = compute_deflated_sharpe_ratio(7.58, rets, annualization_factor=365.0, n_trials=8)
+        self.assertEqual(dsr, 1.0, f"Expected DSR of 1.0 for high positive Sharpe, got {dsr}")
+
+
 if __name__ == "__main__":
     unittest.main()

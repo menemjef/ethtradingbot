@@ -418,17 +418,20 @@ def compute_deflated_sharpe_ratio(
     Returns:
         Probability in [0, 1] that the observed Sharpe ratio exceeds the expected maximum Sharpe ratio from pure luck.
     """
+    if observed_sharpe is not None and math.isnan(observed_sharpe):
+        return float("nan")
+
     T = len(returns) if track_record_len is None else int(track_record_len)
-    if T < 10 or np.std(returns) == 0:
+    if T < 10:
         return 0.0
 
     q = max(1.0, float(annualization_factor))
 
     # Sample skewness (gamma_3) and kurtosis (gamma_4) of returns
     diffs = returns - np.mean(returns)
-    std = np.std(returns)
-    if std <= 1e-12:
-        return 0.0
+    std = float(np.std(returns))
+    if std < 1e-4:
+        return float("nan")
     skew = float(np.mean(diffs ** 3) / (std ** 3 + 1e-12))
     kurt = float(np.mean(diffs ** 4) / (std ** 4 + 1e-12))
 
@@ -439,7 +442,7 @@ def compute_deflated_sharpe_ratio(
     # sigma_SR_ann = sqrt(q * (1 - gamma_3 * sr_0 + ((gamma_4 - 1) / 4) * sr_0^2) / (T - 1))
     var_term = (1.0 - skew * sr_0 + ((kurt - 1.0) / 4.0) * (sr_0 ** 2)) / (T - 1.0)
     if var_term <= 0 or np.isnan(var_term):
-        return 0.0
+        return 1.0 if (observed_sharpe is not None and observed_sharpe > 0) else 0.0
     sr_ann_std = math.sqrt(q * var_term)
     if sr_ann_std <= 1e-12:
         return 0.0
@@ -710,9 +713,9 @@ def compute_continuous_portfolio_metrics(
         "ci_95_hourly_sharpe": ci_sharpe,
         "daily_sortino": round(daily_sortino, 3),
         "calmar_ratio": round(calmar, 3),
-        "deflated_sharpe_ratio": round(daily_dsr, 4),
-        "daily_deflated_sharpe_ratio": round(daily_dsr, 4),
-        "hourly_deflated_sharpe_ratio": round(hourly_dsr, 4),
+        "deflated_sharpe_ratio": round(daily_dsr, 4) if not math.isnan(daily_dsr) else None,
+        "daily_deflated_sharpe_ratio": round(daily_dsr, 4) if not math.isnan(daily_dsr) else None,
+        "hourly_deflated_sharpe_ratio": round(hourly_dsr, 4) if not math.isnan(hourly_dsr) else None,
         "pnl_reconciliation_difference_usd": pnl_reconciliation_diff,
         "monthly_metrics": {
             "average_monthly_return_pct": round(avg_monthly, 2),

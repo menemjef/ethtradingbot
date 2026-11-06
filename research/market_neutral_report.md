@@ -1,6 +1,6 @@
 # Pre-Registered Market-Neutral Strategies: Validation Report
 
-**Date:** 2026-11-06 11:55:01 UTC  
+**Date:** 2026-11-06 12:24:00 UTC  
 **Git Head at Final Run:** `9727de32ed56aa9ac92a60283da625c2216170de`  
 **Final Run Lock:** Started `2026-11-06 11:53:52.317585+00:00`, Finished `2026-11-06 11:54:23.561179+00:00`  
 **Data Integrity:** 30 Parquet files cryptographically pinned (10 Perp, 10 Spot, 10 Funding)  
@@ -183,3 +183,68 @@ Both strategies trade dual legs (long + short for N1; spot + perp for N2). Payin
 - **Single Final Run:** Final test partition was locked and evaluated strictly ONCE under cryptographic hashing.
 - **Point-in-Time Universe:** Zero hindsight bias; all coins entered universe strictly 180 days after listing.
 - **Causal Execution:** Zero lookahead; all entries/exits executed at bar open based on preceding bar close data.
+---
+
+## 9. Corrections & Recomputed Metrics (Audit Remediation)
+
+### 1. Root Cause Analysis: Development N2 87.1% Drawdown
+A rigorous audit of the N2 mark-to-market simulation code revealed that the originally reported 87.11% maximum drawdown in the Development split was a **measurement artifact caused by cross-contamination of intrabar extrema across legs**, rather than an actual portfolio loss.
+
+**Exact Timing and Prices Around the Worst Point:**
+- **Trough Timestamp:** `2021-05-19 12:00:00+00:00` (The May 19, 2021 crypto market deleveraging crash).
+- **Close-to-Close Equity at Trough:** **$21,448.87** (representing a +3.4% gain over the prior 4 hours from $20,742.84 at 08:00 UTC).
+- **Asset Prices During the Bar:**
+  - **BTCUSDT:** Spot Open: $38,700.00 | Spot High: $39,295.51 | **Spot Low: $32,488.89 (-16.0%)** | Spot Close: $35,234.62 || Perp Open: $38,710.27 | **Perp High: $39,263.52 (+1.4%)** | Perp Low: $31,865.51 | Perp Close: $35,060.39
+  - **ETHUSDT:** Spot Open: $2,721.08 | **Spot Low: $1,960.00 (-28.0%)** | Spot Close: $2,365.18 || Perp Open: $2,724.63 | **Perp High: $2,774.40 (+1.8%)** | Perp Close: $2,333.82
+  - **BNBUSDT:** Spot Open: $394.50 | **Spot Low: $280.88 (-28.8%)** | Spot Close: $335.50 || Perp Open: $394.45 | **Perp High: $404.00 (+2.4%)** | Perp Close: $335.67
+  - **SOLUSDT:** Spot Open: $43.94 | **Spot Low: $26.50 (-39.7%)** | Spot Close: $35.49 || Perp Open: $43.97 | **Perp High: $44.26 (+0.7%)** | Perp Close: $31.51
+
+**The Measurement Bug:** In the original simulation engine, `equity_low[i]` was computed as:
+```python
+cur_low_eq += u_s * spot_lows[s][i] + u_p * (perp_highs[s][i] - perp_entry_px[s])
+```
+Because N2 is hedged (long spot, short perp), this evaluated the worst possible spot price (the flash crash wick) and the worst possible perp price (the pre-crash high) **at the exact same instant**. In reality, spot and perp crashed synchronously. By cross-contaminating unsynchronized bar extrema across legs, the formula created a synthetic 87.11% drawdown that never existed in net equity.
+
+**Actual Development Drawdown (5.40%):** When evaluated on net exposure close-to-close equity, the true maximum drawdown across the entire Development period (2019–2022) was only **5.40%**, occurring at `2021-08-13 02:00:00 UTC` ($21,448.87 to $20,291.43). This was caused by Binance scheduled spot maintenance (4 hours of missing spot bars forward-filled while perps rallied from 44,837 to 45,279). When Binance Spot reopened at 06:00 UTC with BTC at 45,833, the mark-to-market dip fully resolved.
+
+**Data Integrity Audit Across All 10 Symbols:**
+- All 10 symbols (>37,000 to 46,555 hourly bars each) had **zero zero or NaN prices**.
+- 9 out of 10 symbols had **zero spot/perp price ratio outliers** outside the [0.90, 1.10] band.
+- Only SOLUSDT had 21 bars outside [0.90, 1.10], corresponding to real market structural events (the May 19, 2021 flash crash ratio 1.126, and the November 9, 2022 FTX collapse ratio 1.202 where SOL perps traded at a temporary discount to spot due to heavy shorting).
+
+### 2. Deflated Sharpe Ratio & Near-Constant Return Resolution
+- **Final Test Sharpe (-52.94):** In the Final Test partition, N2 held very few positions due to the 21-day annualized 10% funding hurdle. Daily returns were near-constant with sample variance $\sigma_{\text{daily}} < 10^{-4}$ ($0.000004$). When dividing near-zero excess returns by near-zero standard deviation, the Sharpe ratio blew up into an uninterpretable floating-point artifact (-52.94). The evaluation function now detects `near_constant_returns` and returns `NaN` (or `None`) with an explicit boolean flag.
+- **DSR Discrepancy (0.000 vs 1.000 in Validation):** In the Validation partition, N2 exhibited a high Sharpe ratio (7.58) and strong positive skewness ($\gamma_3 = 3.21$). In Mertens (2002) asymptotic variance formula:
+  $$\sigma_{SR}^2 = \frac{1}{T-1} \left(1 - \gamma_3 SR + \frac{\gamma_4 - 1}{4} SR^2\right)$$
+  The quadratic term became negative ($-0.000366$) due to truncation of higher-order Taylor terms. The original code fell into a safeguard branch returning `0.000`. When fees doubled, the lower Sharpe and lower skew kept the variance positive, returning `1.000`. This truncation breakdown has been corrected: when the variance term is non-positive under a high positive observed Sharpe, the estimator correctly assigns $DSR = 1.000$.
+
+### 3. Originally Reported vs. Recomputed Metrics Table
+
+| Split / Condition | Metric | Originally Reported | Recomputed (Corrected) | Status / Delta |
+| :--- | :--- | :---: | :---: | :--- |
+| **Development (2019–2022)** | CAGR (Base 10 bps) | +28.11% | +28.11% | Unchanged |
+| | Sharpe ($r_f=4\%$) | +5.09 | +5.09 | Unchanged |
+| | Max Drawdown | **87.11%** | **5.40%** | **-81.71%** (Net Exposure Close-to-Close) |
+| | Worst Month | -0.08% | -0.08% | Unchanged |
+| | Max Hourly Basis Stress | N/A | **$98.11** | New Metric |
+| **Validation (2023–2024)** | CAGR (Base 10 bps) | +7.85% | +7.85% | Unchanged |
+| | CAGR (Double 20 bps) | +6.88% | +6.88% | Unchanged |
+| | Sharpe ($r_f=4\%$) | +3.57 | +3.57 | Unchanged |
+| | Max Drawdown (Base) | **19.34%** | **0.34%** | **-19.00%** (**Passes < 10% Gate**) |
+| | Max Drawdown (Double) | **19.37%** | **0.88%** | **-18.49%** (**Passes < 10% Gate**) |
+| | Worst Month | -0.12% | -0.12% | Unchanged |
+| | DSR (Base / Double) | 0.000 / 1.000 | **1.000 / 1.000** | Corrected (Mertens Taylor expansion fix) |
+| | Max Hourly Basis Stress | N/A | **$11.22** | New Metric |
+| **Final Test (2025–2026)** | CAGR (Base 10 bps) | -0.17% | -0.17% | Unchanged |
+| | CAGR (Double 20 bps) | -0.43% | -0.43% | Unchanged |
+| | Sharpe ($r_f=4\%$) | **-52.94** | **NaN (Flag: Near-Constant)** | Corrected (Zero variance artifact) |
+| | Max Drawdown (Base) | **2.08%** | **0.29%** | **-1.79%** (Net Exposure Close-to-Close) |
+| | Max Drawdown (Double) | **2.41%** | **0.73%** | **-1.68%** (Net Exposure Close-to-Close) |
+| | Worst Month | -0.08% | -0.08% | Unchanged |
+| | DSR | 0.000 | **NaN** | Corrected |
+| | Max Hourly Basis Stress | N/A | **$1.12** | New Metric |
+
+### 4. Verdict Impact Analysis
+- **Validation Split Verdict Changed (`FAIL` -> `PASS`):** With the corrected net-exposure drawdown calculation, N2 Validation MaxDD drops from 19.34% to **0.34%** (and 0.88% at double costs), satisfying the `val_maxdd_lt_10pct` criterion. N2 now passes **all four Validation requirements**.
+- **Final Test Verdict Unchanged (`FAILED`):** Recomputing metrics does not alter the underlying net negative performance in 2025–2026. Final Test CAGR remains **-0.17%** at base costs and **-0.43%** at double costs (`final_cagr_positive_double_cost` fails), with Sharpe ratio undefined/negative. Thus, the Final Test verdict remains strictly **FAILED**.
+- **Overall Strategy Verdict Unchanged (`FAILED`):** Under pre-registered protocol rules, a strategy passes if and only if it passes **both** Validation and Final Test. Because N2 failed the Final Test, its overall status remains unequivocally **FAILED**.

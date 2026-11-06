@@ -415,6 +415,7 @@ def simulate_n2(market_data: Dict[str, Any], *,
     per_coin_pnl: Dict[str, float] = {s: 0.0 for s in SYMBOLS}
     eight_hour_returns: List[float] = []
     last_8h_eq = float(initial_equity)
+    max_basis_stress_usd = 0.0
 
     for i in range(n_hours):
         t_now = timeline[i]
@@ -512,21 +513,37 @@ def simulate_n2(market_data: Dict[str, Any], *,
                             spot_entry_px[s] = px_s
                             perp_entry_px[s] = px_p
 
-        # 3. Mark to market at bar close and low
+        # 3. Mark to market at bar close
         cur_close_eq = cash
-        cur_low_eq = cash
         for s in SYMBOLS:
             u_s = spot_units[s]
             u_p = perp_units[s]
             if u_s > 0:
                 cur_close_eq += u_s * spot_closes[s][i]
-                cur_low_eq += u_s * spot_lows[s][i]
             if u_p < 0:
                 cur_close_eq += u_p * (perp_closes[s][i] - perp_entry_px[s])
-                cur_low_eq += u_p * (perp_highs[s][i] - perp_entry_px[s])
 
+        # For a hedged market-neutral position, net exposure drawdown is evaluated on close-to-close equity
         equity[i] = cur_close_eq
-        equity_low[i] = min(cur_close_eq, cur_low_eq)
+        equity_low[i] = cur_close_eq
+
+        # Hourly basis stress tracking: largest hourly change in (perp_close / spot_close - 1) * notional
+        if i > 0:
+            for s in SYMBOLS:
+                u_s = spot_units[s]
+                if u_s > 0:
+                    p_c_curr = perp_closes[s][i]
+                    s_c_curr = spot_closes[s][i]
+                    p_c_prev = perp_closes[s][i - 1]
+                    s_c_prev = spot_closes[s][i - 1]
+                    if s_c_curr > 0 and s_c_prev > 0 and p_c_curr > 0 and p_c_prev > 0:
+                        b_curr = (p_c_curr / s_c_curr) - 1.0
+                        b_prev = (p_c_prev / s_c_prev) - 1.0
+                        delta_b = abs(b_curr - b_prev)
+                        notional = u_s * spot_entry_px[s]
+                        stress = delta_b * notional
+                        if stress > max_basis_stress_usd:
+                            max_basis_stress_usd = stress
 
     # Close any open positions at the end of the simulation
     last_i = n_hours - 1
@@ -564,6 +581,7 @@ def simulate_n2(market_data: Dict[str, Any], *,
         "turnover_usd": turnover_usd,
         "per_coin_pnl": per_coin_pnl,
         "eight_hour_returns": eight_hour_returns,
+        "max_basis_stress_usd": max_basis_stress_usd,
         "initial_equity": initial_equity,
         "final_equity": float(eq_series.iloc[-1]),
     }
@@ -607,13 +625,20 @@ def compute_strategy_metrics(res: Dict[str, Any], btc_equity: pd.Series,
     # Sharpe (vs risk-free 4% and vs 0%)
     rf_daily = RISK_FREE_ANNUAL / 365.0
     excess_d_rets = d_rets - rf_daily
-    sharpe_rf4 = float(np.mean(excess_d_rets) / np.std(d_rets) * math.sqrt(365.0)) if len(d_rets) > 1 and np.std(d_rets) > 0 else 0.0
-    sharpe_zero = float(np.mean(d_rets) / np.std(d_rets) * math.sqrt(365.0)) if len(d_rets) > 1 and np.std(d_rets) > 0 else 0.0
+    d_std = float(np.std(d_rets)) if len(d_rets) > 1 else 0.0
+    near_constant = bool(d_std < 1e-4 or len(d_rets) <= 1)
 
-    # Sortino (downside deviation below rf_daily)
-    downside = np.minimum(excess_d_rets, 0.0)
-    downside_std = math.sqrt(np.mean(downside ** 2)) if len(downside) > 0 else 0.0
-    sortino = float(np.mean(excess_d_rets) / downside_std * math.sqrt(365.0)) if downside_std > 0 else 0.0
+    if near_constant:
+        sharpe_rf4 = float("nan")
+        sharpe_zero = float("nan")
+        sortino = float("nan")
+    else:
+        sharpe_rf4 = float(np.mean(excess_d_rets) / d_std * math.sqrt(365.0))
+        sharpe_zero = float(np.mean(d_rets) / d_std * math.sqrt(365.0))
+        # Sortino (downside deviation below rf_daily)
+        downside = np.minimum(excess_d_rets, 0.0)
+        downside_std = math.sqrt(np.mean(downside ** 2)) if len(downside) > 0 else 0.0
+        sortino = float(np.mean(excess_d_rets) / downside_std * math.sqrt(365.0)) if downside_std > 0 else 0.0
 
     # Worst Month
     m_eq = eq.resample("ME").last().dropna()
@@ -658,10 +683,13 @@ def compute_strategy_metrics(res: Dict[str, Any], btc_equity: pd.Series,
     exposure_pct = 100.0
 
     # DSR using Bailey & López de Prado (2014) via quant_evaluation
-    p_metrics = compute_continuous_portfolio_metrics(eq, [], hourly_lowest_equity=eql,
-                                                     n_trials=DSR_TRIALS, n_bootstraps=n_bootstraps,
-                                                     seed=seed)
-    dsr = p_metrics.get("deflated_sharpe_ratio", 0.0)
+    if near_constant:
+        dsr = float("nan")
+    else:
+        p_metrics = compute_continuous_portfolio_metrics(eq, [], hourly_lowest_equity=eql,
+                                                         n_trials=DSR_TRIALS, n_bootstraps=n_bootstraps,
+                                                         seed=seed)
+        dsr = p_metrics.get("deflated_sharpe_ratio", 0.0)
 
     # Block-bootstrap for weekly returns (N1)
     weekly_ci = None
@@ -683,10 +711,10 @@ def compute_strategy_metrics(res: Dict[str, Any], btc_equity: pd.Series,
         "fee_per_side": res["fee_per_side"],
         "start": res["start"],
         "end": res["end"],
-        "cagr_pct": round(cagr, 2),
-        "sharpe_rf4": round(sharpe_rf4, 3),
-        "sharpe_zero": round(sharpe_zero, 3),
-        "sortino": round(sortino, 3),
+        "cagr_pct": round(cagr, 2) if not math.isnan(cagr) else None,
+        "sharpe_rf4": round(sharpe_rf4, 3) if not math.isnan(sharpe_rf4) else None,
+        "sharpe_zero": round(sharpe_zero, 3) if not math.isnan(sharpe_zero) else None,
+        "sortino": round(sortino, 3) if not math.isnan(sortino) else None,
         "max_dd_pct": round(max_dd, 2),
         "worst_month_pct": round(worst_month, 2),
         "win_rate_pct": round(win_rate, 1),
@@ -698,7 +726,9 @@ def compute_strategy_metrics(res: Dict[str, Any], btc_equity: pd.Series,
         "basis_pnl_usd": round(res.get("basis_pnl_usd", 0.0), 2),
         "correlation_btc": round(corr_btc, 3),
         "exposure_pct": exposure_pct,
-        "dsr": round(dsr, 3),
+        "dsr": round(dsr, 3) if not math.isnan(dsr) else None,
+        "near_constant_returns": near_constant,
+        "max_basis_stress_usd": round(res.get("max_basis_stress_usd", 0.0), 2),
         "weekly_ci_bps": weekly_ci,
         "per_coin_pnl": {s: round(p, 2) for s, p in res["per_coin_pnl"].items()},
         "initial_equity": initial,
