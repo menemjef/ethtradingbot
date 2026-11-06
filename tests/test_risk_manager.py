@@ -1,6 +1,13 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from datetime import datetime
+import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from live.trader import Trader
 from config import SYMBOL, DAILY_DRAWDOWN_LIMIT
 
@@ -8,6 +15,8 @@ class TestRiskManager(unittest.TestCase):
     def setUp(self):
         self.mock_execution = MagicMock()
         self.mock_execution.get_balance.return_value = 1000.0
+        self.mock_execution.close_position.return_value = {'id': 'close_123', 'status': 'closed', 'verified': True}
+        self.mock_execution.cancel_all_orders.return_value = True
         
         # Force TRADING_ENABLED to True for tests
         patcher = patch('live.trader.TRADING_ENABLED', True)

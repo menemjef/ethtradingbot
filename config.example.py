@@ -126,19 +126,23 @@ def get_current_threshold():
 SIGNAL_THRESHOLD = get_current_threshold()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Trading & Execution Settings
+# Trading & Execution Settings (Fail-Safe Defaults)
 # ─────────────────────────────────────────────────────────────────────────────
-TRADING_ENABLED = True
-MOCK_TRADING = False              # 🔴 LIVE TRADING — Real money on Binance
-PRODUCTION_READY = True            # Enable safety checks
-USE_BINANCE_TESTNET = False        # 🔴 REAL Binance (not testnet)
-INITIAL_PAPER_BALANCE = 10000.0    # Persistent mock balance
-LEVERAGE = 10                      # Moderate leverage (matched to backtest)
-RISK_PER_TRADE_PERCENT = 2.5       # 2.5% risk per trade (Balanced sniper growth)
-POSITION_SIZE_FRACTION = 0.05      # 5% of account balance per trade (halved for safety)
-MAX_POSITION_SIZE_USD = None       # No hard cap — scales with account (set a number to cap)
-DAILY_DRAWDOWN_LIMIT = 0.060        # 6.0% Daily Drawdown Hard Cap (protects against multi-loss day)
-MIN_NOTIONAL_USD = 21.0            # Minimum required by Binance ($20) + buffer
+TRADING_ENABLED = False            # Fail-safe: Disabled by default
+MOCK_TRADING = True               # Fail-safe: Paper trading by default
+PRODUCTION_READY = False          # Fail-safe: Guard against unverified live runs
+USE_BINANCE_TESTNET = True        # Fail-safe: Testnet by default
+INITIAL_PAPER_BALANCE = 10000.0   # Persistent mock balance
+LEVERAGE = 3                      # Conservative institutional default leverage (3x)
+RISK_PER_TRADE_PERCENT = 2.5      # 2.5% risk per trade
+POSITION_SIZE_FRACTION = 0.05     # 5% of account balance per trade
+MAX_POSITION_SIZE_USD = None      # No hard cap — scales with account
+DAILY_DRAWDOWN_LIMIT = 0.060       # 6.0% Daily Drawdown Hard Cap
+MIN_NOTIONAL_USD = 21.0           # Minimum required by Binance ($20) + buffer
+
+# Live Trading Explicit Opt-In Mechanism
+LIVE_TRADING_ACK_TOKEN = "I_UNDERSTAND_REAL_MONEY_IS_AT_RISK"
+ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "0")
 
 # Risk Management Upgrades (Fixed Bracket Orders on Binance)
 USE_ATR_SIZING = False
@@ -217,8 +221,13 @@ def validate_config():
     if SIGNAL_THRESHOLD < 0:
         errors.append(f"Invalid SIGNAL_THRESHOLD: {SIGNAL_THRESHOLD}")
     
-    # Warn about missing API keys for production
-    if not MOCK_TRADING and PRODUCTION_READY:
+    # Enforce strict safety guardrails for live trading
+    if not MOCK_TRADING:
+        if ALLOW_LIVE_TRADING != LIVE_TRADING_ACK_TOKEN:
+            errors.append(
+                f"LIVE TRADING BLOCKED: Environment variable ALLOW_LIVE_TRADING must be set to "
+                f"'{LIVE_TRADING_ACK_TOKEN}'. Live execution cannot start accidentally."
+            )
         if not BINANCE_API_KEY or not BINANCE_API_SECRET:
             errors.append("Missing Binance API credentials for live trading")
     

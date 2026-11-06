@@ -101,14 +101,14 @@ class TestFullPipeline(unittest.TestCase):
         self.assertGreater(self.trader.current_sl, price)
 
     def test_minimum_notional_compliance(self):
-        """Verify position sizing respects Binance minimum notional ($21.00 USD)."""
+        """Verify position sizing skips trade if bumping to min notional violates risk budget."""
         price = 2300.0
-        # Very tiny balance: $10
+        # Very tiny balance: $10 (2.5% risk = $0.25; $21 notional at 1.5% stop risks $0.345 > $0.25)
         self.mock_ee.get_balance.return_value = 10.0
         
         size = self.trader._calculate_position_size(price, atr=25.0, side="LONG")
-        notional = size * price
-        self.assertGreaterEqual(notional, MIN_NOTIONAL_USD - 0.05)
+        # Capital Protection: must skip trade (0.0) rather than violate the 2.5% risk budget
+        self.assertEqual(size, 0.0)
 
     def test_cooldown_blocks_reentry(self):
         """Verify 2-hour cooldown prevents immediate re-entry after trade close."""

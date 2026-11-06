@@ -52,13 +52,16 @@ def simulate_trades_ohlc(
     signals: np.ndarray,
     df_test: pd.DataFrame,
     decision_timestamps: Optional[List[Any]] = None,
+    decision_atrs: Optional[np.ndarray] = None,
     signal_threshold: float = SIGNAL_THRESHOLD,
     pt_mult: float = TBM_PT_MULT,
     sl_mult: float = TBM_SL_MULT,
     holding_max: int = TARGET_HORIZON,
     taker_fee: float = 0.0005,
-    maker_fee: float = 0.0002,
+    maker_fee: float = 0.0005,
     slippage: float = 0.0003,
+    funding_rates: Optional[Dict[Any, float]] = None,
+    funding_stress_rate: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     OHLC-aware barrier trade simulation:
@@ -132,7 +135,12 @@ def simulate_trades_ohlc(
                 entry_bar = i
                 entry_time = curr_time
                 dec_time = curr_dec_time
-                current_atr = atrs[i]
+                # Decision-time ATR (no lookahead into entry candle i complete OHLC)
+                if decision_atrs is not None:
+                    current_atr = decision_atrs[i]
+                else:
+                    dec_idx = i - 1 if i >= 1 else 0
+                    current_atr = atrs[dec_idx]
                 pt_price = entry_price + (pt_mult * current_atr)
                 sl_price = entry_price - (sl_mult * current_atr)
                 in_pos = True
@@ -144,7 +152,12 @@ def simulate_trades_ohlc(
                 entry_bar = i
                 entry_time = curr_time
                 dec_time = curr_dec_time
-                current_atr = atrs[i]
+                # Decision-time ATR (no lookahead into entry candle i complete OHLC)
+                if decision_atrs is not None:
+                    current_atr = decision_atrs[i]
+                else:
+                    dec_idx = i - 1 if i >= 1 else 0
+                    current_atr = atrs[dec_idx]
                 pt_price = entry_price - (pt_mult * current_atr)
                 sl_price = entry_price + (sl_mult * current_atr)
                 in_pos = True
@@ -176,7 +189,7 @@ def simulate_trades_ohlc(
                     exit_price = curr_open * (1.0 - slippage)
                     exit_slip_cost = slippage
                     exit_reason = "take_profit_gap"
-                    exit_fee = maker_fee
+                    exit_fee = taker_fee
                 else:
                     hit_sl = bool(curr_low <= sl_price)
                     hit_tp = bool(curr_high >= pt_price)
@@ -203,7 +216,7 @@ def simulate_trades_ohlc(
                         exit_price = pt_price * (1.0 - slippage)
                         exit_slip_cost = slippage
                         exit_reason = "take_profit"
-                        exit_fee = maker_fee
+                        exit_fee = taker_fee
                     elif holding_bars >= holding_max:
                         exit_trade = True
                         raw_exit_price = curr_close
@@ -228,7 +241,7 @@ def simulate_trades_ohlc(
                     exit_price = curr_open * (1.0 + slippage)
                     exit_slip_cost = slippage
                     exit_reason = "take_profit_gap"
-                    exit_fee = maker_fee
+                    exit_fee = taker_fee
                 else:
                     hit_sl = bool(curr_high >= sl_price)
                     hit_tp = bool(curr_low <= pt_price)
@@ -255,7 +268,7 @@ def simulate_trades_ohlc(
                         exit_price = pt_price * (1.0 + slippage)
                         exit_slip_cost = slippage
                         exit_reason = "take_profit"
-                        exit_fee = maker_fee
+                        exit_fee = taker_fee
                     elif holding_bars >= holding_max:
                         exit_trade = True
                         raw_exit_price = curr_close
@@ -284,11 +297,26 @@ def simulate_trades_ohlc(
                 entry_f = taker_fee
                 exit_f = exit_fee
                 tot_fees = entry_f + exit_f
-                # 4. Funding cost (explicitly zero / excluded)
+
+                # 4. Funding Settlement (8-hour timestamps: 00:00, 08:00, 16:00 UTC)
                 funding_f = 0.0
+                for b_idx in range(entry_bar, i + 1):
+                    b_ts = timestamps[b_idx]
+                    is_funding_bar = False
+                    if hasattr(b_ts, 'hour') and hasattr(b_ts, 'minute'):
+                        if b_ts.hour in (0, 8, 16) and b_ts.minute == 0:
+                            is_funding_bar = True
+                    if is_funding_bar:
+                        rate = 0.0
+                        if funding_rates is not None:
+                            ts_str = str(b_ts)
+                            rate = funding_rates.get(ts_str, funding_rates.get(b_ts, 0.0))
+                        elif funding_stress_rate is not None:
+                            rate = funding_stress_rate
+                        funding_f += float(side * rate)
 
                 # 5. Net return
-                net_ret = float(side * ((exit_price - entry_price) / entry_price) - tot_fees)
+                net_ret = float(side * ((exit_price - entry_price) / entry_price) - tot_fees - funding_f)
 
                 trades.append({
                     "trade_id": trade_id,
@@ -314,7 +342,11 @@ def simulate_trades_ohlc(
                     "entry_fee_cost": float(entry_f),
                     "exit_fee_cost": float(exit_f),
                     "funding_cost": float(funding_f),
-                    "funding_disclosure": "Excluded (historical funding rate data not attached)",
+                    "funding_cost": float(funding_f),
+                    "funding_disclosure": (
+                        "Historical funding settlements applied" if funding_rates is not None
+                        else ("Funding stress applied" if funding_stress_rate is not None else "Excluded (unattached)")
+                    ),
                     "net_return": float(net_ret),
                 })
 
@@ -644,20 +676,51 @@ def run_walk_forward_evaluation(
                 pred_signal = float(reg_p.squeeze().cpu().item()) / TARGET_MULTIPLIER
                 test_signals[j] = pred_signal
 
-        # Directional accuracy on valid targets in test window
-        y_test_raw = df_test_window["target"].values.astype(np.float32)
-        valid_m = ~np.isnan(y_test_raw)
+        # Correct Prediction/Target Alignment (Issue 1):
+        # A prediction generated at candle j-1 close (using information up to j-1)
+        # executes at candle j open. The ground truth target for what happens starting at candle j
+        # is df_feat["target"].iloc[dec_idx], where dec_idx = te_start_idx + j - 1.
+        # Exclude the final bar (j = N_test - 1) because it cannot execute an entry in this fold.
+        eval_signals = test_signals[:N_test - 1]
+        eval_targets = np.array([
+            df_feat["target"].iloc[te_start_idx + j - 1]
+            for j in range(N_test - 1)
+        ], dtype=np.float32)
+        
+        # Verify and record separate chronological timestamps
+        decision_timestamps = [df_feat.index[te_start_idx + j - 1] for j in range(N_test - 1)]
+        target_timestamps = [df_feat.index[te_start_idx + j - 1] for j in range(N_test - 1)]
+        execution_timestamps = [df_test_window.index[j] for j in range(N_test - 1)]
+
+        for dec_t, exec_t in zip(decision_timestamps, execution_timestamps):
+            assert dec_t < exec_t, f"Chronology violation: decision {dec_t} >= execution {exec_t}"
+
+        valid_m = ~np.isnan(eval_targets)
         if valid_m.sum() > 0:
-            reg_acc = directional_accuracy(test_signals[valid_m], y_test_raw[valid_m])
-            mse_val = float(np.mean((test_signals[valid_m] - y_test_raw[valid_m]) ** 2))
+            reg_acc = directional_accuracy(eval_signals[valid_m], eval_targets[valid_m])
+            mse_val = float(np.mean((eval_signals[valid_m] - eval_targets[valid_m]) ** 2))
+            mae_val = float(np.mean(np.abs(eval_signals[valid_m] - eval_targets[valid_m])))
+            
+            y_dir = (eval_targets[valid_m] > 0).astype(int)
+            p_dir = (eval_signals[valid_m] > 0).astype(int)
+            from sklearn.metrics import balanced_accuracy_score
+            bal_acc = float(balanced_accuracy_score(y_dir, p_dir))
         else:
-            reg_acc, mse_val = 0.5, 1.0
+            reg_acc, mse_val, mae_val, bal_acc = 0.5, 1.0, 1.0, 0.5
+
+        # Compute strictly known decision-time ATRs for each test bar (bar j-1 close ATR)
+        dec_atrs = []
+        for j in range(N_test):
+            dec_bar_idx = te_start_idx + j - 1
+            dec_atrs.append(df_feat["atr_14"].iloc[dec_bar_idx])
+        dec_atrs = np.array(dec_atrs, dtype=np.float32)
 
         # 7. OHLC-Aware Trade Simulation with Next-Bar Execution and Gap Accounting
         sim_res = simulate_trades_ohlc(
             signals=test_signals,
             df_test=df_test_window,
             decision_timestamps=dec_times,
+            decision_atrs=dec_atrs,
             signal_threshold=signal_threshold,
             pt_mult=pt_mult,
             sl_mult=sl_mult,
@@ -669,16 +732,20 @@ def run_walk_forward_evaluation(
             "train_samples": len(y_in_tr_win),
             "val_samples": len(y_in_va_win),
             "test_samples": N_test,
+            "eval_sample_count": int(valid_m.sum()),
             "train_timestamps": (str(df_inner_train.index[0]), str(t_in_tr_end)),
             "inner_val_timestamps": (str(t_in_va_start), str(df_inner_val.index[-1])),
             "outer_train_timestamps": (str(t_tr_start), str(t_tr_end)),
             "test_timestamps": (str(t_te_start), str(t_te_end)),
             "test_start_ts": str(t_te_start),
             "test_end_ts": str(t_te_end),
-            "first_decision_ts": str(dec_times[0]) if len(dec_times) > 0 else None,
-            "first_execution_open_ts": str(df_test_window.index[0]) if len(df_test_window) > 0 else None,
+            "first_decision_ts": str(decision_timestamps[0]) if len(decision_timestamps) > 0 else None,
+            "first_target_ts": str(target_timestamps[0]) if len(target_timestamps) > 0 else None,
+            "first_execution_open_ts": str(execution_timestamps[0]) if len(execution_timestamps) > 0 else None,
             "directional_accuracy_reg_pct": float(round(reg_acc * 100, 2)),
+            "balanced_accuracy_pct": float(round(bal_acc * 100, 2)),
             "regression_mse": float(round(mse_val, 4)),
+            "regression_mae": float(round(mae_val, 4)),
             "trade_count": sim_res["trade_count"],
             "win_rate_pct": float(round(sim_res["win_rate"] * 100, 2)),
             "profit_factor": float(round(sim_res["profit_factor"], 2)),

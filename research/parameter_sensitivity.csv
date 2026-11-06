@@ -1,0 +1,10 @@
+strategy,donchian_period,atr_sl_mult,total_trades,win_rate_pct,expectancy_bps,calendar_cagr_pct,max_drawdown_pct,daily_sharpe
+Exp1_Trend_Donchian_4H_Daily,16,2.5,84,42.86,-18.77,-2.6,25.11,-0.203
+Exp1_Trend_Donchian_4H_Daily,16,3.0,83,43.37,-16.91,-1.5,20.71,-0.129
+Exp1_Trend_Donchian_4H_Daily,16,3.5,83,43.37,-30.23,-2.22,18.99,-0.245
+Exp1_Trend_Donchian_4H_Daily,20,2.5,81,43.21,-16.19,-1.66,24.58,-0.113
+Exp1_Trend_Donchian_4H_Daily,20,3.0,80,43.75,-11.89,-0.49,20.27,-0.014
+Exp1_Trend_Donchian_4H_Daily,20,3.5,80,43.75,-23.39,-1.16,18.6,-0.113
+Exp1_Trend_Donchian_4H_Daily,24,2.5,75,42.67,-17.8,-2.09,22.51,-0.161
+Exp1_Trend_Donchian_4H_Daily,24,3.0,74,43.24,-13.68,-0.86,19.25,-0.061
+Exp1_Trend_Donchian_4H_Daily,24,3.5,74,43.24,-26.11,-1.49,16.84,-0.16

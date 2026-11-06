@@ -1,0 +1,1142 @@
+{
+  "metadata": {
+    "asset": "ETH/USDT:USDT",
+    "market_type": "Binance USD-M Perpetual Futures",
+    "timeframe": "1h",
+    "raw_candles_fetched": 4220,
+    "pre_roll_warmup_bars": 720,
+    "retained_research_candles": 3500,
+    "date_range": [
+      "2026-06-11 23:00:00+00:00",
+      "2026-11-04 18:00:00+00:00"
+    ],
+    "n_walk_forward_folds": 4,
+    "barrier_multipliers": {
+      "pt_mult": 2.0,
+      "sl_mult": 2.0,
+      "max_holding_bars": 12
+    },
+    "lookback": 24,
+    "leverage_assumed": 3,
+    "risk_per_trade_percent": 2.5,
+    "active_checkpoint_hash": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+    "alignment_correction": "Decision at candle j-1 evaluates strictly against target[j-1]",
+    "generated_at": "2026-11-04T19:39:55.913976+00:00"
+  },
+  "aggregate": {
+    "HybridModel": {
+      "predictive": {
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 53.34,
+        "weighted_regression_mse": 0.989594
+      },
+      "trading": {
+        "total_trades": 59,
+        "long_trades": 59,
+        "short_trades": 0,
+        "win_rate_pct": 47.46,
+        "gross_profit_pct": 25.4,
+        "gross_loss_pct": 40.26,
+        "profit_factor": 0.631,
+        "average_trade_return_pct": -0.2519,
+        "median_trade_return_pct": -0.2258,
+        "expectancy_bps": -25.19,
+        "ci_95_expectancy_bps": [
+          -61.44,
+          -0.1
+        ],
+        "compounded_net_return_pct": -14.21,
+        "annualized_return_pct": -78.4,
+        "account_equity_levered_return_pct": -22.94,
+        "max_drawdown_pct": 19.0,
+        "account_max_drawdown_pct": 29.92,
+        "sharpe_ratio": -5.004,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -11.112,
+        "calmar_ratio": -4.126,
+        "average_holding_duration_hours": 6.9,
+        "max_consecutive_losses": 5,
+        "fee_costs_pct": 5.9,
+        "slippage_costs_pct": 3.54,
+        "funding_costs_pct": 0.0499,
+        "stop_loss_exits": 26,
+        "take_profit_exits": 18,
+        "collision_exits": 0,
+        "opening_gap_exits": 0,
+        "horizon_exits": 15,
+        "unclosed_invalid_trades": 0
+      }
+    },
+    "GradientBoosting": {
+      "predictive": {
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 49.68,
+        "weighted_regression_mse": 1.383778
+      },
+      "trading": {
+        "total_trades": 376,
+        "long_trades": 173,
+        "short_trades": 203,
+        "win_rate_pct": 43.62,
+        "gross_profit_pct": 162.9,
+        "gross_loss_pct": 235.02,
+        "profit_factor": 0.693,
+        "average_trade_return_pct": -0.1918,
+        "median_trade_return_pct": -0.2305,
+        "expectancy_bps": -19.18,
+        "ci_95_expectancy_bps": [
+          -30.16,
+          -8.41
+        ],
+        "compounded_net_return_pct": -52.72,
+        "annualized_return_pct": -93.45,
+        "account_equity_levered_return_pct": -72.19,
+        "max_drawdown_pct": 55.38,
+        "account_max_drawdown_pct": 75.01,
+        "sharpe_ratio": -5.913,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -10.92,
+        "calmar_ratio": -1.687,
+        "average_holding_duration_hours": 6.4,
+        "max_consecutive_losses": 7,
+        "fee_costs_pct": 37.6,
+        "slippage_costs_pct": 22.56,
+        "funding_costs_pct": -0.1242,
+        "stop_loss_exits": 144,
+        "take_profit_exits": 123,
+        "collision_exits": 1,
+        "opening_gap_exits": 0,
+        "horizon_exits": 107,
+        "unclosed_invalid_trades": 0
+      }
+    },
+    "MajorityBaseline": {
+      "predictive": {
+        "total_oos_samples": 2788,
+        "weighted_directional_accuracy_pct": 54.06,
+        "weighted_regression_mse": 0.985941
+      },
+      "trading": {
+        "total_trades": 380,
+        "long_trades": 380,
+        "short_trades": 0,
+        "win_rate_pct": 48.95,
+        "gross_profit_pct": 178.25,
+        "gross_loss_pct": 220.17,
+        "profit_factor": 0.81,
+        "average_trade_return_pct": -0.1103,
+        "median_trade_return_pct": -0.0306,
+        "expectancy_bps": -11.03,
+        "ci_95_expectancy_bps": [
+          -24.15,
+          0.37
+        ],
+        "compounded_net_return_pct": -36.05,
+        "annualized_return_pct": -80.29,
+        "account_equity_levered_return_pct": -53.99,
+        "max_drawdown_pct": 41.35,
+        "account_max_drawdown_pct": 60.02,
+        "sharpe_ratio": -3.398,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": -6.443,
+        "calmar_ratio": -1.942,
+        "average_holding_duration_hours": 6.3,
+        "max_consecutive_losses": 6,
+        "fee_costs_pct": 38.0,
+        "slippage_costs_pct": 22.8,
+        "funding_costs_pct": 0.6868,
+        "stop_loss_exits": 134,
+        "take_profit_exits": 136,
+        "collision_exits": 1,
+        "opening_gap_exits": 0,
+        "horizon_exits": 107,
+        "unclosed_invalid_trades": 0
+      }
+    },
+    "NoTrade": {
+      "predictive": {
+        "total_oos_samples": 0,
+        "weighted_directional_accuracy_pct": 50.0,
+        "weighted_regression_mse": 1.0
+      },
+      "trading": {
+        "total_trades": 0,
+        "long_trades": 0,
+        "short_trades": 0,
+        "win_rate_pct": 0.0,
+        "gross_profit_pct": 0.0,
+        "gross_loss_pct": 0.0,
+        "profit_factor": 0.0,
+        "average_trade_return_pct": 0.0,
+        "median_trade_return_pct": 0.0,
+        "expectancy_bps": 0.0,
+        "ci_95_expectancy_bps": [
+          0.0,
+          0.0
+        ],
+        "compounded_net_return_pct": 0.0,
+        "annualized_return_pct": 0.0,
+        "account_equity_levered_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "account_max_drawdown_pct": 0.0,
+        "sharpe_ratio": 0.0,
+        "deflated_sharpe_ratio": 0.0,
+        "sortino_ratio": 0.0,
+        "calmar_ratio": 0.0,
+        "average_holding_duration_hours": 0.0,
+        "max_consecutive_losses": 0,
+        "fee_costs_pct": 0.0,
+        "slippage_costs_pct": 0.0,
+        "funding_costs_pct": 0.0,
+        "stop_loss_exits": 0,
+        "take_profit_exits": 0,
+        "collision_exits": 0,
+        "opening_gap_exits": 0,
+        "horizon_exits": 0,
+        "unclosed_invalid_trades": 0
+      }
+    }
+  },
+  "folds": [
+    {
+      "fold": 1,
+      "dates": {
+        "train_start": "2026-06-11 23:00:00+00:00",
+        "train_end": "2026-07-10 22:00:00+00:00",
+        "test_start": "2026-07-11 11:00:00+00:00",
+        "test_end": "2026-08-09 06:00:00+00:00",
+        "test_candles": 692,
+        "eval_samples": 691
+      },
+      "models": {
+        "HybridModel": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 49.35,
+            "ci_95_directional_accuracy": [
+              40.77,
+              57.44
+            ],
+            "balanced_accuracy_pct": 47.15,
+            "precision_pct": 52.03,
+            "recall_pct": 75.81,
+            "f1_score": 0.6171,
+            "regression_mse": 0.995958,
+            "ci_95_regression_mse": [
+              0.9846,
+              1.0082
+            ],
+            "regression_mae": 0.997291,
+            "zero_baseline_mse": 1.0,
+            "brier_score": 0.2666,
+            "log_loss": 0.7309,
+            "ece": 0.1415
+          },
+          "trading": {
+            "total_trades": 5,
+            "long_trades": 5,
+            "short_trades": 0,
+            "win_rate_pct": 60.0,
+            "gross_profit_pct": 3.4,
+            "gross_loss_pct": 1.63,
+            "profit_factor": 2.087,
+            "average_trade_return_pct": 0.3536,
+            "median_trade_return_pct": 0.3683,
+            "expectancy_bps": 35.36,
+            "ci_95_expectancy_bps": [
+              35.36,
+              35.36
+            ],
+            "compounded_net_return_pct": 1.75,
+            "annualized_return_pct": 18.94,
+            "account_equity_levered_return_pct": 2.9,
+            "max_drawdown_pct": 1.4,
+            "account_max_drawdown_pct": 2.34,
+            "sharpe_ratio": 2.262,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 4.255,
+            "calmar_ratio": 13.518,
+            "average_holding_duration_hours": 8.4,
+            "max_consecutive_losses": 1,
+            "fee_costs_pct": 0.5,
+            "slippage_costs_pct": 0.3,
+            "funding_costs_pct": 0.0062,
+            "stop_loss_exits": 1,
+            "take_profit_exits": 2,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 2,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "GradientBoosting": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 46.74,
+            "ci_95_directional_accuracy": [
+              37.8,
+              55.81
+            ],
+            "balanced_accuracy_pct": 49.22,
+            "precision_pct": 51.64,
+            "recall_pct": 16.94,
+            "f1_score": 0.2551,
+            "regression_mse": 1.514753,
+            "ci_95_regression_mse": [
+              1.2617,
+              1.7577
+            ],
+            "regression_mae": 1.075801,
+            "zero_baseline_mse": 1.0,
+            "brier_score": 0.5176,
+            "log_loss": 6.1149,
+            "ece": 0.5173
+          },
+          "trading": {
+            "total_trades": 85,
+            "long_trades": 12,
+            "short_trades": 73,
+            "win_rate_pct": 40.0,
+            "gross_profit_pct": 29.97,
+            "gross_loss_pct": 50.84,
+            "profit_factor": 0.589,
+            "average_trade_return_pct": -0.2455,
+            "median_trade_return_pct": -0.3897,
+            "expectancy_bps": -24.55,
+            "ci_95_expectancy_bps": [
+              -48.93,
+              0.97
+            ],
+            "compounded_net_return_pct": -19.23,
+            "annualized_return_pct": -88.18,
+            "account_equity_levered_return_pct": -30.32,
+            "max_drawdown_pct": 19.03,
+            "account_max_drawdown_pct": 30.86,
+            "sharpe_ratio": -6.931,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -13.92,
+            "calmar_ratio": -4.635,
+            "average_holding_duration_hours": 7.1,
+            "max_consecutive_losses": 7,
+            "fee_costs_pct": 8.5,
+            "slippage_costs_pct": 5.1,
+            "funding_costs_pct": -0.1205,
+            "stop_loss_exits": 32,
+            "take_profit_exits": 23,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 30,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "MajorityBaseline": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 53.84,
+            "ci_95_directional_accuracy": [
+              44.79,
+              63.1
+            ],
+            "balanced_accuracy_pct": 50.0,
+            "precision_pct": 53.84,
+            "recall_pct": 100.0,
+            "f1_score": 0.6999,
+            "regression_mse": 0.994128,
+            "ci_95_regression_mse": [
+              0.9645,
+              1.0231
+            ],
+            "regression_mae": 0.993864,
+            "zero_baseline_mse": 1.0,
+            "brier_score": 0.3348,
+            "log_loss": 0.9225,
+            "ece": 0.2937
+          },
+          "trading": {
+            "total_trades": 88,
+            "long_trades": 88,
+            "short_trades": 0,
+            "win_rate_pct": 51.14,
+            "gross_profit_pct": 37.31,
+            "gross_loss_pct": 45.51,
+            "profit_factor": 0.82,
+            "average_trade_return_pct": -0.0932,
+            "median_trade_return_pct": 0.0425,
+            "expectancy_bps": -9.32,
+            "ci_95_expectancy_bps": [
+              -33.2,
+              11.14
+            ],
+            "compounded_net_return_pct": -8.34,
+            "annualized_return_pct": -58.13,
+            "account_equity_levered_return_pct": -13.99,
+            "max_drawdown_pct": 11.5,
+            "account_max_drawdown_pct": 18.75,
+            "sharpe_ratio": -2.601,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -4.976,
+            "calmar_ratio": -5.055,
+            "average_holding_duration_hours": 6.9,
+            "max_consecutive_losses": 5,
+            "fee_costs_pct": 8.8,
+            "slippage_costs_pct": 5.28,
+            "funding_costs_pct": 0.1363,
+            "stop_loss_exits": 28,
+            "take_profit_exits": 32,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 27,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "NoTrade": {
+          "predictive": {
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
+          },
+          "trading": {
+            "total_trades": 0,
+            "long_trades": 0,
+            "short_trades": 0,
+            "win_rate_pct": 0.0,
+            "gross_profit_pct": 0.0,
+            "gross_loss_pct": 0.0,
+            "profit_factor": 0.0,
+            "average_trade_return_pct": 0.0,
+            "median_trade_return_pct": 0.0,
+            "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
+            "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
+            "average_holding_duration_hours": 0.0,
+            "max_consecutive_losses": 0,
+            "fee_costs_pct": 0.0,
+            "slippage_costs_pct": 0.0,
+            "funding_costs_pct": 0.0,
+            "stop_loss_exits": 0,
+            "take_profit_exits": 0,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
+          }
+        }
+      }
+    },
+    {
+      "fold": 2,
+      "dates": {
+        "train_start": "2026-06-11 23:00:00+00:00",
+        "train_end": "2026-08-08 18:00:00+00:00",
+        "test_start": "2026-08-09 07:00:00+00:00",
+        "test_end": "2026-09-07 02:00:00+00:00",
+        "test_candles": 692,
+        "eval_samples": 691
+      },
+      "models": {
+        "HybridModel": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 61.94,
+            "ci_95_directional_accuracy": [
+              52.23,
+              70.54
+            ],
+            "balanced_accuracy_pct": 51.62,
+            "precision_pct": 63.49,
+            "recall_pct": 92.38,
+            "f1_score": 0.7526,
+            "regression_mse": 0.986577,
+            "ci_95_regression_mse": [
+              0.974,
+              1.0057
+            ],
+            "regression_mae": 0.990466,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.2563,
+            "log_loss": 0.7162,
+            "ece": 0.1331
+          },
+          "trading": {
+            "total_trades": 6,
+            "long_trades": 6,
+            "short_trades": 0,
+            "win_rate_pct": 33.33,
+            "gross_profit_pct": 0.36,
+            "gross_loss_pct": 5.0,
+            "profit_factor": 0.073,
+            "average_trade_return_pct": -0.7732,
+            "median_trade_return_pct": -0.7884,
+            "expectancy_bps": -77.32,
+            "ci_95_expectancy_bps": [
+              -93.61,
+              -71.45
+            ],
+            "compounded_net_return_pct": -4.57,
+            "annualized_return_pct": -37.35,
+            "account_equity_levered_return_pct": -7.54,
+            "max_drawdown_pct": 3.89,
+            "account_max_drawdown_pct": 7.6,
+            "sharpe_ratio": -7.539,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -11.909,
+            "calmar_ratio": -9.605,
+            "average_holding_duration_hours": 8.5,
+            "max_consecutive_losses": 3,
+            "fee_costs_pct": 0.6,
+            "slippage_costs_pct": 0.36,
+            "funding_costs_pct": 0.0102,
+            "stop_loss_exits": 3,
+            "take_profit_exits": 0,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 3,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "GradientBoosting": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 43.99,
+            "ci_95_directional_accuracy": [
+              34.08,
+              53.13
+            ],
+            "balanced_accuracy_pct": 47.48,
+            "precision_pct": 59.35,
+            "recall_pct": 33.72,
+            "f1_score": 0.43,
+            "regression_mse": 1.786934,
+            "ci_95_regression_mse": [
+              1.4782,
+              2.1784
+            ],
+            "regression_mae": 1.118562,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.5467,
+            "log_loss": 8.0214,
+            "ece": 0.5481
+          },
+          "trading": {
+            "total_trades": 93,
+            "long_trades": 36,
+            "short_trades": 57,
+            "win_rate_pct": 40.86,
+            "gross_profit_pct": 37.49,
+            "gross_loss_pct": 61.18,
+            "profit_factor": 0.613,
+            "average_trade_return_pct": -0.2547,
+            "median_trade_return_pct": -0.1741,
+            "expectancy_bps": -25.47,
+            "ci_95_expectancy_bps": [
+              -49.92,
+              -3.54
+            ],
+            "compounded_net_return_pct": -21.73,
+            "annualized_return_pct": -91.37,
+            "account_equity_levered_return_pct": -34.12,
+            "max_drawdown_pct": 22.34,
+            "account_max_drawdown_pct": 34.97,
+            "sharpe_ratio": -6.013,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -9.142,
+            "calmar_ratio": -4.09,
+            "average_holding_duration_hours": 6.4,
+            "max_consecutive_losses": 7,
+            "fee_costs_pct": 9.3,
+            "slippage_costs_pct": 5.58,
+            "funding_costs_pct": -0.1319,
+            "stop_loss_exits": 35,
+            "take_profit_exits": 30,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 28,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "MajorityBaseline": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 62.66,
+            "ci_95_directional_accuracy": [
+              52.53,
+              71.43
+            ],
+            "balanced_accuracy_pct": 50.0,
+            "precision_pct": 62.66,
+            "recall_pct": 100.0,
+            "f1_score": 0.7705,
+            "regression_mse": 0.960843,
+            "ci_95_regression_mse": [
+              0.9364,
+              0.9954
+            ],
+            "regression_mae": 0.975398,
+            "zero_baseline_mse": 0.995658,
+            "brier_score": 0.2762,
+            "log_loss": 0.7813,
+            "ece": 0.2054
+          },
+          "trading": {
+            "total_trades": 95,
+            "long_trades": 95,
+            "short_trades": 0,
+            "win_rate_pct": 50.53,
+            "gross_profit_pct": 47.58,
+            "gross_loss_pct": 49.43,
+            "profit_factor": 0.963,
+            "average_trade_return_pct": -0.0194,
+            "median_trade_return_pct": 0.0067,
+            "expectancy_bps": -1.94,
+            "ci_95_expectancy_bps": [
+              -27.94,
+              24.92
+            ],
+            "compounded_net_return_pct": -2.58,
+            "annualized_return_pct": -22.99,
+            "account_equity_levered_return_pct": -5.08,
+            "max_drawdown_pct": 14.46,
+            "account_max_drawdown_pct": 23.34,
+            "sharpe_ratio": -0.471,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -0.759,
+            "calmar_ratio": -1.59,
+            "average_holding_duration_hours": 6.3,
+            "max_consecutive_losses": 5,
+            "fee_costs_pct": 9.5,
+            "slippage_costs_pct": 5.7,
+            "funding_costs_pct": 0.2646,
+            "stop_loss_exits": 30,
+            "take_profit_exits": 36,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 29,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "NoTrade": {
+          "predictive": {
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
+          },
+          "trading": {
+            "total_trades": 0,
+            "long_trades": 0,
+            "short_trades": 0,
+            "win_rate_pct": 0.0,
+            "gross_profit_pct": 0.0,
+            "gross_loss_pct": 0.0,
+            "profit_factor": 0.0,
+            "average_trade_return_pct": 0.0,
+            "median_trade_return_pct": 0.0,
+            "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
+            "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
+            "average_holding_duration_hours": 0.0,
+            "max_consecutive_losses": 0,
+            "fee_costs_pct": 0.0,
+            "slippage_costs_pct": 0.0,
+            "funding_costs_pct": 0.0,
+            "stop_loss_exits": 0,
+            "take_profit_exits": 0,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
+          }
+        }
+      }
+    },
+    {
+      "fold": 3,
+      "dates": {
+        "train_start": "2026-06-11 23:00:00+00:00",
+        "train_end": "2026-09-06 14:00:00+00:00",
+        "test_start": "2026-09-07 03:00:00+00:00",
+        "test_end": "2026-10-05 22:00:00+00:00",
+        "test_candles": 692,
+        "eval_samples": 691
+      },
+      "models": {
+        "HybridModel": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 56.01,
+            "ci_95_directional_accuracy": [
+              47.92,
+              66.07
+            ],
+            "balanced_accuracy_pct": 50.97,
+            "precision_pct": 55.92,
+            "recall_pct": 97.39,
+            "f1_score": 0.7105,
+            "regression_mse": 0.981681,
+            "ci_95_regression_mse": [
+              0.95,
+              1.0076
+            ],
+            "regression_mae": 0.985409,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.2883,
+            "log_loss": 0.7962,
+            "ece": 0.2072
+          },
+          "trading": {
+            "total_trades": 26,
+            "long_trades": 26,
+            "short_trades": 0,
+            "win_rate_pct": 50.0,
+            "gross_profit_pct": 12.58,
+            "gross_loss_pct": 17.54,
+            "profit_factor": 0.717,
+            "average_trade_return_pct": -0.1907,
+            "median_trade_return_pct": -0.1822,
+            "expectancy_bps": -19.07,
+            "ci_95_expectancy_bps": [
+              -73.72,
+              35.44
+            ],
+            "compounded_net_return_pct": -5.03,
+            "annualized_return_pct": -40.32,
+            "account_equity_levered_return_pct": -8.45,
+            "max_drawdown_pct": 7.2,
+            "account_max_drawdown_pct": 13.76,
+            "sharpe_ratio": -2.488,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -6.996,
+            "calmar_ratio": -5.603,
+            "average_holding_duration_hours": 6.7,
+            "max_consecutive_losses": 5,
+            "fee_costs_pct": 2.6,
+            "slippage_costs_pct": 1.56,
+            "funding_costs_pct": 0.0276,
+            "stop_loss_exits": 11,
+            "take_profit_exits": 10,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 5,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "GradientBoosting": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 56.3,
+            "ci_95_directional_accuracy": [
+              49.55,
+              62.65
+            ],
+            "balanced_accuracy_pct": 56.19,
+            "precision_pct": 61.34,
+            "recall_pct": 57.18,
+            "f1_score": 0.5919,
+            "regression_mse": 0.994943,
+            "ci_95_regression_mse": [
+              0.9245,
+              1.0691
+            ],
+            "regression_mae": 0.957617,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.3792,
+            "log_loss": 1.9933,
+            "ece": 0.3631
+          },
+          "trading": {
+            "total_trades": 95,
+            "long_trades": 51,
+            "short_trades": 44,
+            "win_rate_pct": 40.0,
+            "gross_profit_pct": 40.46,
+            "gross_loss_pct": 66.75,
+            "profit_factor": 0.606,
+            "average_trade_return_pct": -0.2768,
+            "median_trade_return_pct": -0.5842,
+            "expectancy_bps": -27.68,
+            "ci_95_expectancy_bps": [
+              -49.9,
+              -7.63
+            ],
+            "compounded_net_return_pct": -23.69,
+            "annualized_return_pct": -93.31,
+            "account_equity_levered_return_pct": -36.81,
+            "max_drawdown_pct": 25.23,
+            "account_max_drawdown_pct": 38.88,
+            "sharpe_ratio": -6.995,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -15.023,
+            "calmar_ratio": -3.698,
+            "average_holding_duration_hours": 6.2,
+            "max_consecutive_losses": 6,
+            "fee_costs_pct": 9.5,
+            "slippage_costs_pct": 5.7,
+            "funding_costs_pct": 0.0373,
+            "stop_loss_exits": 40,
+            "take_profit_exits": 28,
+            "collision_exits": 1,
+            "opening_gap_exits": 0,
+            "horizon_exits": 26,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "MajorityBaseline": {
+          "predictive": {
+            "n_samples": 691,
+            "directional_accuracy_pct": 55.43,
+            "ci_95_directional_accuracy": [
+              47.32,
+              65.78
+            ],
+            "balanced_accuracy_pct": 50.0,
+            "precision_pct": 55.43,
+            "recall_pct": 100.0,
+            "f1_score": 0.7132,
+            "regression_mse": 0.98064,
+            "ci_95_regression_mse": [
+              0.9432,
+              1.0093
+            ],
+            "regression_mae": 0.984081,
+            "zero_baseline_mse": 0.992764,
+            "brier_score": 0.3242,
+            "log_loss": 0.8971,
+            "ece": 0.2777
+          },
+          "trading": {
+            "total_trades": 94,
+            "long_trades": 94,
+            "short_trades": 0,
+            "win_rate_pct": 51.06,
+            "gross_profit_pct": 46.25,
+            "gross_loss_pct": 57.63,
+            "profit_factor": 0.803,
+            "average_trade_return_pct": -0.121,
+            "median_trade_return_pct": 0.0555,
+            "expectancy_bps": -12.1,
+            "ci_95_expectancy_bps": [
+              -37.9,
+              16.95
+            ],
+            "compounded_net_return_pct": -11.4,
+            "annualized_return_pct": -70.2,
+            "account_equity_levered_return_pct": -18.93,
+            "max_drawdown_pct": 14.67,
+            "account_max_drawdown_pct": 25.15,
+            "sharpe_ratio": -3.004,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -6.352,
+            "calmar_ratio": -4.786,
+            "average_holding_duration_hours": 6.4,
+            "max_consecutive_losses": 6,
+            "fee_costs_pct": 9.4,
+            "slippage_costs_pct": 5.64,
+            "funding_costs_pct": 0.189,
+            "stop_loss_exits": 33,
+            "take_profit_exits": 33,
+            "collision_exits": 1,
+            "opening_gap_exits": 0,
+            "horizon_exits": 27,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "NoTrade": {
+          "predictive": {
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
+          },
+          "trading": {
+            "total_trades": 0,
+            "long_trades": 0,
+            "short_trades": 0,
+            "win_rate_pct": 0.0,
+            "gross_profit_pct": 0.0,
+            "gross_loss_pct": 0.0,
+            "profit_factor": 0.0,
+            "average_trade_return_pct": 0.0,
+            "median_trade_return_pct": 0.0,
+            "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
+            "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
+            "average_holding_duration_hours": 0.0,
+            "max_consecutive_losses": 0,
+            "fee_costs_pct": 0.0,
+            "slippage_costs_pct": 0.0,
+            "funding_costs_pct": 0.0,
+            "stop_loss_exits": 0,
+            "take_profit_exits": 0,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
+          }
+        }
+      }
+    },
+    {
+      "fold": 4,
+      "dates": {
+        "train_start": "2026-06-11 23:00:00+00:00",
+        "train_end": "2026-10-05 10:00:00+00:00",
+        "test_start": "2026-10-05 23:00:00+00:00",
+        "test_end": "2026-11-04 18:00:00+00:00",
+        "test_candles": 716,
+        "eval_samples": 715
+      },
+      "models": {
+        "HybridModel": {
+          "predictive": {
+            "n_samples": 715,
+            "directional_accuracy_pct": 46.29,
+            "ci_95_directional_accuracy": [
+              37.35,
+              54.6
+            ],
+            "balanced_accuracy_pct": 50.2,
+            "precision_pct": 44.73,
+            "recall_pct": 86.52,
+            "f1_score": 0.5897,
+            "regression_mse": 0.994007,
+            "ci_95_regression_mse": [
+              0.9826,
+              1.0249
+            ],
+            "regression_mae": 0.988962,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.3081,
+            "log_loss": 0.8368,
+            "ece": 0.2258
+          },
+          "trading": {
+            "total_trades": 22,
+            "long_trades": 22,
+            "short_trades": 0,
+            "win_rate_pct": 45.45,
+            "gross_profit_pct": 9.06,
+            "gross_loss_pct": 16.09,
+            "profit_factor": 0.563,
+            "average_trade_return_pct": -0.3197,
+            "median_trade_return_pct": -0.5376,
+            "expectancy_bps": -31.97,
+            "ci_95_expectancy_bps": [
+              -84.17,
+              3.23
+            ],
+            "compounded_net_return_pct": -6.97,
+            "annualized_return_pct": -51.42,
+            "account_equity_levered_return_pct": -11.52,
+            "max_drawdown_pct": 9.18,
+            "account_max_drawdown_pct": 15.43,
+            "sharpe_ratio": -3.762,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -7.616,
+            "calmar_ratio": -5.604,
+            "average_holding_duration_hours": 6.4,
+            "max_consecutive_losses": 5,
+            "fee_costs_pct": 2.2,
+            "slippage_costs_pct": 1.32,
+            "funding_costs_pct": 0.0059,
+            "stop_loss_exits": 11,
+            "take_profit_exits": 6,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 5,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "GradientBoosting": {
+          "predictive": {
+            "n_samples": 715,
+            "directional_accuracy_pct": 51.61,
+            "ci_95_directional_accuracy": [
+              43.53,
+              60.34
+            ],
+            "balanced_accuracy_pct": 53.75,
+            "precision_pct": 47.28,
+            "recall_pct": 73.67,
+            "f1_score": 0.576,
+            "regression_mse": 1.243361,
+            "ci_95_regression_mse": [
+              1.0503,
+              1.4541
+            ],
+            "regression_mae": 0.979818,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.4573,
+            "log_loss": 4.5499,
+            "ece": 0.4526
+          },
+          "trading": {
+            "total_trades": 103,
+            "long_trades": 74,
+            "short_trades": 29,
+            "win_rate_pct": 52.43,
+            "gross_profit_pct": 54.98,
+            "gross_loss_pct": 56.25,
+            "profit_factor": 0.978,
+            "average_trade_return_pct": -0.0123,
+            "median_trade_return_pct": 0.0715,
+            "expectancy_bps": -1.23,
+            "ci_95_expectancy_bps": [
+              -22.23,
+              16.9
+            ],
+            "compounded_net_return_pct": -1.99,
+            "annualized_return_pct": -18.25,
+            "account_equity_levered_return_pct": -4.11,
+            "max_drawdown_pct": 11.3,
+            "account_max_drawdown_pct": 18.58,
+            "sharpe_ratio": -0.327,
+            "deflated_sharpe_ratio": 0.0004,
+            "sortino_ratio": -0.669,
+            "calmar_ratio": -1.615,
+            "average_holding_duration_hours": 5.9,
+            "max_consecutive_losses": 5,
+            "fee_costs_pct": 10.3,
+            "slippage_costs_pct": 6.18,
+            "funding_costs_pct": 0.0909,
+            "stop_loss_exits": 37,
+            "take_profit_exits": 42,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 23,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "MajorityBaseline": {
+          "predictive": {
+            "n_samples": 715,
+            "directional_accuracy_pct": 44.62,
+            "ci_95_directional_accuracy": [
+              35.63,
+              54.45
+            ],
+            "balanced_accuracy_pct": 50.0,
+            "precision_pct": 44.62,
+            "recall_pct": 100.0,
+            "f1_score": 0.617,
+            "regression_mse": 1.007407,
+            "ci_95_regression_mse": [
+              0.9855,
+              1.05
+            ],
+            "regression_mae": 0.994629,
+            "zero_baseline_mse": 0.986014,
+            "brier_score": 0.396,
+            "log_loss": 1.0701,
+            "ece": 0.3859
+          },
+          "trading": {
+            "total_trades": 103,
+            "long_trades": 103,
+            "short_trades": 0,
+            "win_rate_pct": 43.69,
+            "gross_profit_pct": 47.11,
+            "gross_loss_pct": 67.6,
+            "profit_factor": 0.697,
+            "average_trade_return_pct": -0.199,
+            "median_trade_return_pct": -0.2427,
+            "expectancy_bps": -19.9,
+            "ci_95_expectancy_bps": [
+              -43.32,
+              2.95
+            ],
+            "compounded_net_return_pct": -19.17,
+            "annualized_return_pct": -88.1,
+            "account_equity_levered_return_pct": -30.49,
+            "max_drawdown_pct": 24.05,
+            "account_max_drawdown_pct": 37.55,
+            "sharpe_ratio": -5.211,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": -11.146,
+            "calmar_ratio": -3.663,
+            "average_holding_duration_hours": 6.0,
+            "max_consecutive_losses": 6,
+            "fee_costs_pct": 10.3,
+            "slippage_costs_pct": 6.18,
+            "funding_costs_pct": 0.0969,
+            "stop_loss_exits": 43,
+            "take_profit_exits": 35,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 24,
+            "unclosed_invalid_trades": 0
+          }
+        },
+        "NoTrade": {
+          "predictive": {
+            "directional_accuracy_pct": 50.0,
+            "regression_mse": 1.0
+          },
+          "trading": {
+            "total_trades": 0,
+            "long_trades": 0,
+            "short_trades": 0,
+            "win_rate_pct": 0.0,
+            "gross_profit_pct": 0.0,
+            "gross_loss_pct": 0.0,
+            "profit_factor": 0.0,
+            "average_trade_return_pct": 0.0,
+            "median_trade_return_pct": 0.0,
+            "expectancy_bps": 0.0,
+            "ci_95_expectancy_bps": [
+              0.0,
+              0.0
+            ],
+            "compounded_net_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "account_equity_levered_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "account_max_drawdown_pct": 0.0,
+            "sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "calmar_ratio": 0.0,
+            "average_holding_duration_hours": 0.0,
+            "max_consecutive_losses": 0,
+            "fee_costs_pct": 0.0,
+            "slippage_costs_pct": 0.0,
+            "funding_costs_pct": 0.0,
+            "stop_loss_exits": 0,
+            "take_profit_exits": 0,
+            "collision_exits": 0,
+            "opening_gap_exits": 0,
+            "horizon_exits": 0,
+            "unclosed_invalid_trades": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -47,15 +47,33 @@ _shutdown_event = None
 def pre_flight_check():
     """
     Security and connectivity checks before real trading starts.
-    This ensures that we don't start the bot if API keys are missing or if 
-    we are out of funds. It acts as a safety guardrail.
+    Guarantees fail-safe defaults and prevents accidental live execution.
     """
-    from config import MOCK_TRADING, PRODUCTION_READY, BINANCE_API_KEY, BINANCE_API_SECRET
+    from config import (
+        MOCK_TRADING, PRODUCTION_READY, BINANCE_API_KEY, BINANCE_API_SECRET,
+        ALLOW_LIVE_TRADING, LIVE_TRADING_ACK_TOKEN, validate_config
+    )
     
-    # If we are actually trading real money (not mock trading) and production is enabled
-    if not MOCK_TRADING and PRODUCTION_READY:
+    # 0. Strict Config Validation
+    cfg_errors, cfg_warnings = validate_config()
+    for w in cfg_warnings:
+        logger.warning(f"Config Warning: {w}")
+    if cfg_errors:
+        for err in cfg_errors:
+            logger.error(f"Config Error: {err}")
+        return False
+    
+    # If we are actually trading real money (not mock trading)
+    if not MOCK_TRADING:
         logger.info("RUNNING PRODUCTION PRE-FLIGHT CHECKS...")
         
+        if ALLOW_LIVE_TRADING != LIVE_TRADING_ACK_TOKEN:
+            logger.error(
+                "CRITICAL: Live execution blocked. Explicit token ALLOW_LIVE_TRADING='%s' required.",
+                LIVE_TRADING_ACK_TOKEN
+            )
+            return False
+            
         # Check if we forgot to put our API keys in the .env file
         if not BINANCE_API_KEY or not BINANCE_API_SECRET:
             logger.error("CRITICAL: API Credentials missing. Trading aborted.")
@@ -64,7 +82,8 @@ def pre_flight_check():
         # Verify connectivity and balance by asking Binance for our wallet balance
         try:
             temp_engine = ExecutionEngine(mock=False)
-            balance = temp_engine.get_balance()
+            bal_val = temp_engine.get_balance()
+            balance = getattr(bal_val, 'balance', bal_val)
             if balance <= 0:
                 logger.warning(f"WARNING: Wallet balance is {balance} USDT.")
             else:
