@@ -14,10 +14,12 @@ Enforces:
 import os
 import sys
 import json
+import time
 import sqlite3
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone, timedelta
+from contextlib import closing
 import pandas as pd
 import numpy as np
 
@@ -62,6 +64,29 @@ class CandleGapError(Exception):
         self.missing_bars = missing_bars
 
 
+class ManagedConnection:
+    """
+    Context manager wrapper around sqlite3.Connection that ensures the underlying
+    database connection is ALWAYS closed upon context manager exit, resolving
+    resource leakage across long-running processes.
+    """
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self._conn.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 class CandidateAPaperRunner:
     """
     Forward paper-trading runner for Candidate A (Exp1_Momentum_Continuation_4H).
@@ -91,11 +116,32 @@ class CandidateAPaperRunner:
         self._init_runner_tables()
         self._load_processed_1m_open_times()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self):
         conn = sqlite3.connect(self.paper_db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
-        return conn
+        return ManagedConnection(conn)
+
+    def is_replay_behind(self) -> bool:
+        """Checks if the runner has completed 1m candles in market_db newer than last processed."""
+        if self.gap_halted:
+            return True
+        last_ot = self.last_processed_1m_open_time.get(self.symbol, -1)
+        if last_ot <= 0:
+            return False
+        if os.path.exists(self.market_db_path):
+            try:
+                with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT COUNT(*) FROM completed_klines WHERE symbol = ? AND timeframe = '1m' AND open_time > ?",
+                        (self.symbol, last_ot)
+                    )
+                    row = cur.fetchone()
+                    return bool(row and row[0] > 0)
+            except Exception:
+                pass
+        return False
 
     def _load_processed_1m_open_times(self):
         """Loads latest processed 1m candle open_time from SQLite for persistent deduplication."""
@@ -481,187 +527,195 @@ class CandidateAPaperRunner:
         - Evaluates Stop Loss and Take Profit with stop-first collision resolution.
         - Checks adverse opening gaps if current_bar is provided.
         - Enforces 72-hour maximum holding horizon.
-        - Applies any pending realized funding rate settlements.
+        - Applies any pending realized funding rate settlements without look-ahead.
+        - Updates continuous portfolio MTM (using candle close during replay).
+        - Atomically persists candle markers and funding in a single transaction.
         NOTE: Operates independently of the 4-hour strategy signal evaluation schedule!
         """
-        # Issue 1: Apply pending funding settlements (timestamp bounded if current_bar is provided)
-        if current_bar and current_bar.get("close_time"):
-            self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=int(current_bar["close_time"]))
-        else:
-            self.exec_engine.apply_settled_funding_rates()
-
-        # Update continuous portfolio MTM
-        self.exec_engine.update_mark_to_market(quotes)
-
-        quote = quotes.get(self.symbol)
         now_str = datetime.now(timezone.utc).isoformat()
-
+        quote = quotes.get(self.symbol) if isinstance(quotes, dict) else None
         key = (self.strategy_id, self.symbol)
         pos = self.exec_engine.active_positions.get(key)
 
-        # Check stops and gaps against current 1m bar
-        if current_bar:
-            # Enforce strict symbol isolation: never process a bar belonging to another symbol
-            bar_sym = current_bar.get("symbol")
-            if bar_sym and bar_sym != self.symbol:
-                logger.debug(f"Ignoring bar for {bar_sym}: runner is configured for {self.symbol}.")
-                return
-
-            # Persistent Deduplication: process each completed 1m candle only once
-            bar_ot = current_bar.get("open_time")
-            if bar_ot is not None:
+        # ---------------------------------------------------------------------
+        # Case A: Live quote tick (current_bar is None)
+        # ---------------------------------------------------------------------
+        if current_bar is None:
+            # Fix 1: While replay is behind or gap_halted, bound funding to last processed candle
+            if self.gap_halted or self.is_replay_behind():
                 last_ot = self.last_processed_1m_open_time.get(self.symbol, -1)
-                if bar_ot <= last_ot:
-                    # Already processed this exact 1m completed candle
-                    return
+                funding_bound_ms = (last_ot + 59999) if last_ot > 0 else 0
+            else:
+                funding_bound_ms = int(time.time() * 1000)
 
-            b_open = float(current_bar.get("open", 0.0))
-            b_high = float(current_bar.get("high", 0.0))
-            b_low = float(current_bar.get("low", 0.0))
-            b_close = float(current_bar.get("close", 0.0))
-            b_close_time = current_bar.get("close_time")
-            b_open_time = current_bar.get("open_time")
+            self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=funding_bound_ms)
+            self.exec_engine.update_mark_to_market(quotes)
 
-            trigger = None
-            if pos:
-                trigger = self.exec_engine.check_position_stops_and_gaps(
-                    strategy_id=self.strategy_id,
-                    symbol=self.symbol,
-                    bar_open=b_open,
-                    bar_high=b_high,
-                    bar_low=b_low,
-                    bar_close=b_close,
-                    bar_close_time=b_close_time,
-                    bar_open_time=b_open_time
-                )
-
-            position_closed = False
-            if trigger:
-                reason, gap_px = trigger
-                candle_exit_time = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc).isoformat() if b_close_time else now_str
-                processed_candle_info = {
-                    "strategy_id": self.strategy_id,
-                    "symbol": self.symbol,
-                    "open_time": int(bar_ot),
-                    "close_time": int(b_close_time),
-                    "processed_at": now_str
-                } if (bar_ot is not None and b_close_time is not None) else None
-                close_res = self.exec_engine.close_position(
-                    strategy_id=self.strategy_id,
-                    symbol=self.symbol,
-                    exit_reason=reason,
-                    quote=None,
-                    adverse_gap_price=gap_px,
-                    candle_price=b_close,
-                    exit_time_str=candle_exit_time,
-                    processed_candle_info=processed_candle_info
-                )
-                if close_res and bar_ot is not None:
-                    self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
-                position_closed = True
-            elif pos:
-                # Check horizon expiry against current bar
+            # Protect existing position using fresh live quotes
+            if pos and quote:
                 try:
-                    t_ent = datetime.fromisoformat(pos["entry_time"])
-                    if b_close_time:
-                        bar_dt = datetime.fromtimestamp(int(b_close_time)/1000.0, tz=timezone.utc)
-                        hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
-                        if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
-                            candle_exit_time = bar_dt.isoformat()
-                            processed_candle_info = {
-                                "strategy_id": self.strategy_id,
-                                "symbol": self.symbol,
-                                "open_time": int(bar_ot),
-                                "close_time": int(b_close_time),
-                                "processed_at": now_str
-                            } if (bar_ot is not None and b_close_time is not None) else None
-                            close_res = self.exec_engine.close_position(
-                                strategy_id=self.strategy_id,
-                                symbol=self.symbol,
-                                exit_reason="horizon_expiry",
-                                quote=None,
-                                candle_price=b_close,
-                                exit_time_str=candle_exit_time,
-                                processed_candle_info=processed_candle_info
-                            )
-                            if close_res and bar_ot is not None:
-                                self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
-                            position_closed = True
-                except Exception as e:
-                    logger.error(f"Error checking horizon expiry on bar: {e}")
-                    raise
+                    best_bid, best_ask = self.exec_engine.validate_quote_freshness(quote)
+                    side = pos["side"]
+                    sl = pos["stop_loss"]
+                    tp = pos["take_profit"]
+                    tick_size = float(self.exec_engine.contract_specs.get(self.symbol, {}).get("tick_size", 0.01))
 
-            # Section C: If candle did not close a position, persist processed candle in a single transaction
-            if not position_closed and bar_ot is not None and b_close_time is not None:
-                with self._get_connection() as conn:
-                    conn.execute("""
-                    INSERT OR IGNORE INTO processed_1m_candles (
-                        strategy_id, symbol, open_time, close_time, processed_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        self.strategy_id,
-                        self.symbol,
-                        int(bar_ot),
-                        int(b_close_time),
-                        now_str
-                    ))
-                    conn.commit()
-                self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
+                    trigger_reason = None
+                    if side == "LONG":
+                        sl_hit = best_bid <= sl
+                        tp_hit = best_bid >= (tp + tick_size - 1e-9)
+                        if sl_hit and tp_hit:
+                            trigger_reason = "stop_loss_collision"
+                        elif sl_hit:
+                            trigger_reason = "stop_loss"
+                        elif tp_hit:
+                            trigger_reason = "take_profit"
+                    else:  # SHORT
+                        sl_hit = best_ask >= sl
+                        tp_hit = best_ask <= (tp - tick_size + 1e-9)
+                        if sl_hit and tp_hit:
+                            trigger_reason = "stop_loss_collision"
+                        elif sl_hit:
+                            trigger_reason = "stop_loss"
+                        elif tp_hit:
+                            trigger_reason = "take_profit"
 
-        elif pos and quote:
-            # Issue 3: Protecting existing position in real-time using fresh live quotes (e.g. during data gaps or between bars)
-            try:
-                best_bid, best_ask = self.exec_engine.validate_quote_freshness(quote)
-                side = pos["side"]
-                sl = pos["stop_loss"]
-                tp = pos["take_profit"]
-                tick_size = float(self.exec_engine.contract_specs.get(self.symbol, {}).get("tick_size", 0.01))
-
-                trigger_reason = None
-                if side == "LONG":
-                    sl_hit = best_bid <= sl
-                    tp_hit = best_bid >= (tp + tick_size - 1e-9)
-                    if sl_hit and tp_hit:
-                        trigger_reason = "stop_loss_collision"
-                    elif sl_hit:
-                        trigger_reason = "stop_loss"
-                    elif tp_hit:
-                        trigger_reason = "take_profit"
-                else:  # SHORT
-                    sl_hit = best_ask >= sl
-                    tp_hit = best_ask <= (tp - tick_size + 1e-9)
-                    if sl_hit and tp_hit:
-                        trigger_reason = "stop_loss_collision"
-                    elif sl_hit:
-                        trigger_reason = "stop_loss"
-                    elif tp_hit:
-                        trigger_reason = "take_profit"
-
-                if trigger_reason:
-                    self.exec_engine.close_position(
-                        strategy_id=self.strategy_id,
-                        symbol=self.symbol,
-                        exit_reason=trigger_reason,
-                        quote=quote,
-                        exit_time_str=now_str
-                    )
-                else:
-                    # Check live 72-hour maximum holding horizon expiry
-                    t_ent = datetime.fromisoformat(pos["entry_time"])
-                    t_now = datetime.now(timezone.utc)
-                    hours_held = (t_now - t_ent).total_seconds() / 3600.0
-                    if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                    if trigger_reason:
                         self.exec_engine.close_position(
                             strategy_id=self.strategy_id,
                             symbol=self.symbol,
-                            exit_reason="horizon_expiry",
+                            exit_reason=trigger_reason,
                             quote=quote,
-                            exit_time_str=now_str
+                            quotes=quotes
                         )
-            except StaleQuoteError as e:
-                logger.warning(f"Could not manage position with live quote: {e}")
+                except Exception as e:
+                    logger.error(f"Error managing position with live quote: {e}")
+            return
+
+        # ---------------------------------------------------------------------
+        # Case B: 1m Completed Candle Processing / Replay
+        # ---------------------------------------------------------------------
+        # Enforce strict symbol isolation: never process a bar belonging to another symbol
+        bar_sym = current_bar.get("symbol")
+        if bar_sym and bar_sym != self.symbol:
+            logger.debug(f"Ignoring bar for {bar_sym}: runner is configured for {self.symbol}.")
+            return
+
+        # Persistent Deduplication: process each completed 1m candle only once
+        bar_ot = current_bar.get("open_time")
+        if bar_ot is not None:
+            last_ot = self.last_processed_1m_open_time.get(self.symbol, -1)
+            if bar_ot <= last_ot:
+                return
+
+        b_open = float(current_bar.get("open", 0.0))
+        b_high = float(current_bar.get("high", 0.0))
+        b_low = float(current_bar.get("low", 0.0))
+        b_close = float(current_bar.get("close", 0.0))
+        b_close_time = current_bar.get("close_time")
+        b_open_time = current_bar.get("open_time")
+
+        funding_bound_ms = int(b_close_time) if b_close_time else (int(bar_ot) + 59999 if bar_ot else int(time.time() * 1000))
+        candle_dt_str = datetime.fromtimestamp(int(b_close_time) / 1000.0, tz=timezone.utc).isoformat() if b_close_time else now_str
+
+        # Fix 4: Mark to the replayed candle close, not live quotes
+        candle_quotes = dict(quotes) if isinstance(quotes, dict) else {}
+        candle_quotes[self.symbol] = {
+            "mid_price": b_close,
+            "best_bid": b_close,
+            "best_ask": b_close,
+            "receipt_ts": int(b_close_time or time.time() * 1000)
+        }
+        self.exec_engine.update_mark_to_market(candle_quotes, mark_time_str=candle_dt_str)
+
+        trigger = None
+        if pos:
+            trigger = self.exec_engine.check_position_stops_and_gaps(
+                strategy_id=self.strategy_id,
+                symbol=self.symbol,
+                bar_open=b_open,
+                bar_high=b_high,
+                bar_low=b_low,
+                bar_close=b_close,
+                bar_close_time=b_close_time,
+                bar_open_time=b_open_time
+            )
+
+        position_closed = False
+        if trigger:
+            reason, gap_px = trigger
+            # Apply any pending funding up to candle close time before closing
+            self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=funding_bound_ms)
+            candle_exit_time = candle_dt_str
+            processed_candle_info = {
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
+                "open_time": int(bar_ot),
+                "close_time": int(b_close_time),
+                "processed_at": now_str
+            } if (bar_ot is not None and b_close_time is not None) else None
+            close_res = self.exec_engine.close_position(
+                strategy_id=self.strategy_id,
+                symbol=self.symbol,
+                exit_reason=reason,
+                quote=None,
+                adverse_gap_price=gap_px,
+                candle_price=b_close,
+                exit_time_str=candle_exit_time,
+                processed_candle_info=processed_candle_info,
+                quotes=candle_quotes
+            )
+            if close_res and bar_ot is not None:
+                self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
+            position_closed = True
+        elif pos:
+            # Check horizon expiry against current bar
+            try:
+                t_ent = datetime.fromisoformat(pos["entry_time"])
+                if b_close_time:
+                    bar_dt = datetime.fromtimestamp(int(b_close_time) / 1000.0, tz=timezone.utc)
+                    hours_held = (bar_dt - t_ent).total_seconds() / 3600.0
+                    if hours_held >= CANDIDATE_A_MAX_HOLDING_HOURS:
+                        self.exec_engine.apply_settled_funding_rates(max_settlement_time_ms=funding_bound_ms)
+                        candle_exit_time = bar_dt.isoformat()
+                        processed_candle_info = {
+                            "strategy_id": self.strategy_id,
+                            "symbol": self.symbol,
+                            "open_time": int(bar_ot),
+                            "close_time": int(b_close_time),
+                            "processed_at": now_str
+                        } if (bar_ot is not None and b_close_time is not None) else None
+                        close_res = self.exec_engine.close_position(
+                            strategy_id=self.strategy_id,
+                            symbol=self.symbol,
+                            exit_reason="horizon_expiry",
+                            quote=None,
+                            candle_price=b_close,
+                            exit_time_str=candle_exit_time,
+                            processed_candle_info=processed_candle_info,
+                            quotes=candle_quotes
+                        )
+                        if close_res and bar_ot is not None:
+                            self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
+                        position_closed = True
             except Exception as e:
-                logger.error(f"Error checking live quote triggers: {e}")
+                logger.error(f"Error checking horizon expiry on bar: {e}")
+                raise
+
+        # Fix 2: If candle did not close a position, apply funding and processed candle marker in ONE transaction
+        if not position_closed and bar_ot is not None and b_close_time is not None:
+            processed_candle_info = {
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
+                "open_time": int(bar_ot),
+                "close_time": int(b_close_time),
+                "processed_at": now_str
+            }
+            self.exec_engine.apply_settled_funding_rates(
+                max_settlement_time_ms=funding_bound_ms,
+                processed_candle_info=processed_candle_info
+            )
+            self.last_processed_1m_open_time[self.symbol] = int(bar_ot)
 
     def replay_missed_completed_1m_bars(
         self,
@@ -724,7 +778,7 @@ class CandidateAPaperRunner:
                     last_ot = 0
             else:
                 try:
-                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                    with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as m_conn:
                         cur = m_conn.cursor()
                         cur.execute(
                             "SELECT MAX(open_time) FROM completed_klines WHERE symbol = ? AND timeframe = '1m' AND close_time < ?",
@@ -738,7 +792,7 @@ class CandidateAPaperRunner:
 
         raw_bars = []
         try:
-            with sqlite3.connect(self.market_db_path, timeout=10.0) as m_conn:
+            with closing(sqlite3.connect(self.market_db_path, timeout=10.0)) as m_conn:
                 cur = m_conn.cursor()
                 cur.execute("""
                 SELECT open_time, close_time, open, high, low, close

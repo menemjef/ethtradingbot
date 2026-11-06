@@ -21,6 +21,7 @@ import sqlite3
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
+from contextlib import closing
 
 from paper.config import (
     PAPER_DB_PATH,
@@ -49,6 +50,29 @@ class StaleQuoteError(Exception):
     pass
 
 
+class ManagedConnection:
+    """
+    Context manager wrapper around sqlite3.Connection that ensures the underlying
+    database connection is ALWAYS closed upon context manager exit, resolving
+    resource leakage across long-running processes.
+    """
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self._conn.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 class PaperExecutionEngine:
     """
     Production-grade paper execution engine with fail-closed persistence,
@@ -63,14 +87,21 @@ class PaperExecutionEngine:
         taker_fee_rate: float = TAKER_FEE_RATE,
         slippage_rate: float = SLIPPAGE_RATE,
         max_leverage: float = MAX_LEVERAGE_CAP,
-        max_quote_age_sec: float = MAX_QUOTE_AGE_SECONDS
+        max_quote_age_sec: float = MAX_QUOTE_AGE_SECONDS,
+        tp_slippage_rate: Optional[float] = None
     ):
         self.db_path = db_path
         self.market_db_path = market_db_path
         self.taker_fee_rate = taker_fee_rate
         self.slippage_rate = slippage_rate
+        self.tp_slippage_rate = tp_slippage_rate if tp_slippage_rate is not None else self.slippage_rate
         self.max_leverage = max_leverage
         self.max_quote_age_sec = max_quote_age_sec
+
+        # Snapshot throttling state: only write snapshot when equity/positions change, or at most once per minute
+        self._last_snapshot_time: float = 0.0
+        self._last_snapshot_equity: Optional[float] = None
+        self._last_snapshot_positions_state: Any = None
 
         # Contract specifications cache
         self.contract_specs: Dict[str, Dict[str, Any]] = dict(CONTRACT_SPECS_FALLBACK)
@@ -81,30 +112,36 @@ class PaperExecutionEngine:
         # Active virtual positions: {(strategy_id, symbol): position_dict}
         self.active_positions: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._load_state_from_db(initial_capital)
+        self._record_snapshot_tracker()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _record_snapshot_tracker(self):
+        """Updates internal trackers for portfolio snapshot throttling."""
+        self._last_snapshot_time = time.time()
+        self._last_snapshot_equity = self.portfolio.get("equity")
+        self._last_snapshot_positions_state = tuple(sorted((p["position_id"], p.get("current_price", 0.0)) for p in self.active_positions.values()))
+
+    def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
-        return conn
+        return ManagedConnection(conn)
 
     def _load_contract_specs(self):
         """Loads contract specs from market_data.db if available."""
         if os.path.exists(self.market_db_path):
             try:
-                conn = sqlite3.connect(self.market_db_path, timeout=5.0)
-                cur = conn.cursor()
-                cur.execute("SELECT symbol, tick_size, step_size, min_qty, min_notional, max_notional, funding_interval_hours FROM exchange_metadata")
-                for r in cur.fetchall():
-                    self.contract_specs[r[0]] = {
-                        "tick_size": float(r[1]),
-                        "step_size": float(r[2]),
-                        "min_qty": float(r[3]),
-                        "min_notional": float(r[4]),
-                        "max_notional": float(r[5]),
-                        "funding_interval_hours": int(r[6])
-                    }
-                conn.close()
+                with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT symbol, tick_size, step_size, min_qty, min_notional, max_notional, funding_interval_hours FROM exchange_metadata")
+                    for r in cur.fetchall():
+                        self.contract_specs[r[0]] = {
+                            "tick_size": float(r[1]),
+                            "step_size": float(r[2]),
+                            "min_qty": float(r[3]),
+                            "min_notional": float(r[4]),
+                            "max_notional": float(r[5]),
+                            "funding_interval_hours": int(r[6])
+                        }
             except Exception:
                 pass
 
@@ -462,7 +499,7 @@ class PaperExecutionEngine:
 
                 if c_px is None and os.path.exists(self.market_db_path):
                     try:
-                        with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                        with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as m_conn:
                             m_cur = m_conn.cursor()
                             m_cur.execute(
                                 "SELECT mark_price, timestamp FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
@@ -544,6 +581,7 @@ class PaperExecutionEngine:
                 round(self.portfolio.get("net_leverage", 0.0), 2)
             ))
             conn.commit()
+        self._record_snapshot_tracker()
 
     # =========================================================================
     # Quantization & Validation Helpers
@@ -742,6 +780,7 @@ class PaperExecutionEngine:
 
         self.active_positions[key] = pos
         self._update_portfolio_leverage()
+        self._record_snapshot_tracker()
         logger.info(f"[{strategy_id}] Opened {side} Position: {symbol} | Qty: {quantized_qty:.4f} | Entry Px: ${fill_price:.2f} | SL: ${pos['stop_loss']:.2f} | TP: ${pos['take_profit']:.2f} | Fee: ${fee_usd:.2f}")
         return pos
 
@@ -754,7 +793,8 @@ class PaperExecutionEngine:
         adverse_gap_price: Optional[float] = None,
         exit_time_str: Optional[str] = None,
         candle_price: Optional[float] = None,
-        processed_candle_info: Optional[Dict[str, Any]] = None
+        processed_candle_info: Optional[Dict[str, Any]] = None,
+        quotes: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Closes an open position with realistic fee, adverse slippage, and separated PnL accounting.
@@ -819,10 +859,14 @@ class PaperExecutionEngine:
             else:
                 fill_price = self.quantize_price(symbol, gap_base * (1.0 + self.slippage_rate))
         elif exit_reason == "take_profit":
-            # Historical take-profit target fill: clearly defined conservative target fill (exact target price)
+            # Historical take-profit target fill: apply configurable TP slippage so fills are not optimistic
             target_px = float(pos["take_profit"])
             quote_used = target_px
-            fill_price = self.quantize_price(symbol, target_px)
+            tp_slip = getattr(self, "tp_slippage_rate", self.slippage_rate)
+            if side == "LONG":
+                fill_price = self.quantize_price(symbol, target_px * (1.0 - tp_slip))
+            else:
+                fill_price = self.quantize_price(symbol, target_px * (1.0 + tp_slip))
         elif candle_price is not None and candle_price > 0:
             # Historical candle close exit (e.g. horizon expiry or bar close during replay)
             c_px = float(candle_price)
@@ -857,6 +901,9 @@ class PaperExecutionEngine:
 
         # Recalculate unrealized PnL and equity for all remaining open positions (Section D)
         remaining_unrealized = 0.0
+        equity_unverified = False
+        quotes_dict = quotes if isinstance(quotes, dict) else {}
+
         for r_key, r_pos in self.active_positions.items():
             if r_key == key:
                 continue
@@ -866,13 +913,14 @@ class PaperExecutionEngine:
             r_sym = r_pos["symbol"]
 
             cur_px = None
-            if quote and r_sym == symbol:
+            if quotes_dict and r_sym in quotes_dict and isinstance(quotes_dict[r_sym], dict):
+                q_r = quotes_dict[r_sym]
+                cur_px = q_r.get("mid_price") or q_r.get("best_bid") or q_r.get("best_ask")
+            if cur_px is None and quote and r_sym == symbol:
                 cur_px = quote.get("mid_price") or quote.get("best_bid") or quote.get("best_ask")
-            if cur_px is None:
-                cur_px = r_pos.get("current_price")
             if cur_px is None and os.path.exists(self.market_db_path):
                 try:
-                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                    with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as m_conn:
                         m_cur = m_conn.cursor()
                         m_cur.execute(
                             "SELECT mark_price FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
@@ -885,14 +933,25 @@ class PaperExecutionEngine:
                     pass
 
             if cur_px is None:
+                cur_px = r_pos.get("current_price")
+
+            if cur_px is None:
+                equity_unverified = True
+                logger.warning(
+                    f"No fresh mark price or stored current_price available for remaining position {r_sym} "
+                    f"during {symbol} close. Flagging equity as unverified."
+                )
                 cur_px = r_entry
-            cur_px = float(cur_px)
+            else:
+                cur_px = float(cur_px)
 
             if r_side == "LONG":
                 u_pnl = (cur_px - r_entry) * r_qty
             else:
                 u_pnl = (r_entry - cur_px) * r_qty
             remaining_unrealized += u_pnl
+
+        self.portfolio["equity_unverified"] = equity_unverified
 
         new_unrealized = remaining_unrealized
         new_equity = new_cash + new_margin + new_unrealized
@@ -1008,12 +1067,15 @@ class PaperExecutionEngine:
 
         del self.active_positions[key]
         self._update_portfolio_leverage()
+        self._record_snapshot_tracker()
         logger.info(f"[{strategy_id}] Closed {side} Position: {symbol} | Exit Px: ${fill_price:.2f} | Reason: {exit_reason} | Net PnL: ${net_pnl:.2f} | Dur: {holding_hours:.1f}h")
         return {
             "trade_id": trade_id,
             "strategy_id": strategy_id,
             "symbol": symbol,
             "side": side,
+            "entry_price": pos["entry_price"],
+            "entry_fee_usd": pos.get("entry_fee_usd", 0.0),
             "exit_price": fill_price,
             "exit_fee_usd": exit_fee_usd,
             "directional_pnl": round(directional_pnl, 2),
@@ -1123,19 +1185,20 @@ class PaperExecutionEngine:
 
         return None
 
-    def update_mark_to_market(self, quotes: Dict[str, Dict[str, Any]]):
+    def update_mark_to_market(self, quotes: Dict[str, Dict[str, Any]], mark_time_str: Optional[str] = None):
         """
         Updates portfolio unrealized PnL and leverage using fresh quotes for all active positions.
         Section D:
           - Maintains latest mark price and timestamp for every active position in memory and SQLite.
           - Recalculates unrealized PnL and equity consistently: equity = cash + margin + unrealized.
           - Updates peak equity and drawdown consistently.
-          - Persists mark-to-market snapshots so restarts do not silently lose equity peaks.
+          - Persists mark-to-market snapshots (throttled to equity/position changes or at most once per minute).
+          - Uses historical candle close price and timestamp during replay.
         """
         if not self.active_positions:
             return
 
-        now_str = datetime.now(timezone.utc).isoformat()
+        now_str = mark_time_str or datetime.now(timezone.utc).isoformat()
         total_unrealized = 0.0
         updated_positions = []
 
@@ -1147,7 +1210,7 @@ class PaperExecutionEngine:
 
             if mid_px is None and os.path.exists(self.market_db_path):
                 try:
-                    with sqlite3.connect(self.market_db_path, timeout=5.0) as m_conn:
+                    with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as m_conn:
                         m_cur = m_conn.cursor()
                         m_cur.execute(
                             "SELECT mark_price FROM funding_and_mark_price WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
@@ -1186,6 +1249,16 @@ class PaperExecutionEngine:
         self.portfolio["drawdown_pct"] = ((peak - self.portfolio["equity"]) / peak * 100.0) if peak > 0 else 0.0
         self._update_portfolio_leverage(quotes)
 
+        # Snapshot throttling: write snapshot when explicit mark_time_str is provided (replay),
+        # or when equity/positions change, or at most once per 60 seconds.
+        now_ts = time.time()
+        positions_key = tuple(sorted((p["position_id"], p.get("current_price", 0.0)) for p in self.active_positions.values()))
+        equity_changed = (self._last_snapshot_equity is None) or (abs(self.portfolio["equity"] - self._last_snapshot_equity) >= 0.01)
+        positions_changed = (self._last_snapshot_positions_state != positions_key)
+        time_elapsed = (now_ts - self._last_snapshot_time) >= 60.0
+
+        should_write_snapshot = (mark_time_str is not None) or equity_changed or positions_changed or time_elapsed
+
         # Persist position mark state and portfolio snapshot atomically
         with self._get_connection() as conn:
             for px, t_str, pid in updated_positions:
@@ -1195,23 +1268,25 @@ class PaperExecutionEngine:
                 WHERE position_id = ?;
                 """, (px, t_str, pid))
 
-            conn.execute("""
-            INSERT INTO paper_portfolio (
-                timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
-                margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """, (
-                now_str,
-                round(self.portfolio["cash_balance"], 2),
-                round(self.portfolio["equity"], 2),
-                round(self.portfolio["realized_pnl"], 2),
-                round(self.portfolio["unrealized_pnl"], 2),
-                round(self.portfolio["margin_used"], 2),
-                round(self.portfolio["peak_equity"], 2),
-                round(self.portfolio["drawdown_pct"], 2),
-                round(self.portfolio.get("gross_leverage", 0.0), 2),
-                round(self.portfolio.get("net_leverage", 0.0), 2)
-            ))
+            if should_write_snapshot:
+                conn.execute("""
+                INSERT INTO paper_portfolio (
+                    timestamp, cash_balance, equity, realized_pnl, unrealized_pnl,
+                    margin_used, peak_equity, drawdown_pct, gross_leverage, net_leverage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    now_str,
+                    round(self.portfolio["cash_balance"], 2),
+                    round(self.portfolio["equity"], 2),
+                    round(self.portfolio["realized_pnl"], 2),
+                    round(self.portfolio["unrealized_pnl"], 2),
+                    round(self.portfolio["margin_used"], 2),
+                    round(self.portfolio["peak_equity"], 2),
+                    round(self.portfolio["drawdown_pct"], 2),
+                    round(self.portfolio.get("gross_leverage", 0.0), 2),
+                    round(self.portfolio.get("net_leverage", 0.0), 2)
+                ))
+                self._record_snapshot_tracker()
             conn.commit()
 
     def _update_portfolio_leverage(self, quotes: Optional[Dict[str, Dict[str, Any]]] = None):
@@ -1238,35 +1313,68 @@ class PaperExecutionEngine:
     # Idempotent Funding Settlement Accounting
     # =========================================================================
 
-    def apply_settled_funding_rates(self, max_settlement_time_ms: Optional[int] = None) -> int:
+    def apply_settled_funding_rates(
+        self,
+        max_settlement_time_ms: int,
+        processed_candle_info: Optional[Dict[str, Any]] = None
+    ) -> int:
         """
         Queries unapplied funding settlements from market_data.db and applies them
         to active virtual positions holding that symbol at settlement_time.
-        If max_settlement_time_ms is provided, settlements after that timestamp are excluded.
-        Guarantees exact single-application (idempotency) via unique constraints.
+        max_settlement_time_ms is required in effect to prevent funding look-ahead.
+        If processed_candle_info is provided, persists funding and the processed candle marker
+        in the exact same transaction, guaranteeing non-exit candle atomicity.
         Updates in-memory state ONLY after successful database commit.
-        Includes portfolio snapshot in the same transaction (Section B).
         """
+        if max_settlement_time_ms is None:
+            raise ValueError("max_settlement_time_ms is required in effect to prevent funding look-ahead.")
+        max_settlement_time_ms = int(max_settlement_time_ms)
+
+        now_str = datetime.now(timezone.utc).isoformat()
+
         if not os.path.exists(self.market_db_path) or not self.active_positions:
+            if processed_candle_info:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                    INSERT OR IGNORE INTO processed_1m_candles (
+                        strategy_id, symbol, open_time, close_time, processed_at
+                    ) VALUES (?, ?, ?, ?, ?);
+                    """, (
+                        processed_candle_info["strategy_id"],
+                        processed_candle_info["symbol"],
+                        int(processed_candle_info["open_time"]),
+                        int(processed_candle_info["close_time"]),
+                        processed_candle_info.get("processed_at", now_str)
+                    ))
+                    conn.commit()
             return 0
 
         settlements_applied = 0
-        now_str = datetime.now(timezone.utc).isoformat()
 
         try:
-            m_conn = sqlite3.connect(self.market_db_path, timeout=5.0)
-            m_cur = m_conn.cursor()
-            if max_settlement_time_ms is not None:
+            with closing(sqlite3.connect(self.market_db_path, timeout=5.0)) as m_conn:
+                m_cur = m_conn.cursor()
                 m_cur.execute(
                     "SELECT symbol, settlement_time, funding_rate, mark_price FROM funding_settlements WHERE settlement_time <= ? ORDER BY settlement_time ASC",
-                    (int(max_settlement_time_ms),)
+                    (max_settlement_time_ms,)
                 )
-            else:
-                m_cur.execute("SELECT symbol, settlement_time, funding_rate, mark_price FROM funding_settlements ORDER BY settlement_time ASC")
-            settlement_rows = m_cur.fetchall()
-            m_conn.close()
+                settlement_rows = m_cur.fetchall()
         except Exception as e:
             logger.error(f"Could not read funding_settlements from market_data.db: {e}")
+            if processed_candle_info:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                    INSERT OR IGNORE INTO processed_1m_candles (
+                        strategy_id, symbol, open_time, close_time, processed_at
+                    ) VALUES (?, ?, ?, ?, ?);
+                    """, (
+                        processed_candle_info["strategy_id"],
+                        processed_candle_info["symbol"],
+                        int(processed_candle_info["open_time"]),
+                        int(processed_candle_info["close_time"]),
+                        processed_candle_info.get("processed_at", now_str)
+                    ))
+                    conn.commit()
             return 0
 
         pending_payments = []
@@ -1274,7 +1382,7 @@ class PaperExecutionEngine:
 
         with self._get_connection() as conn:
             for sym, sett_time, f_rate, mp in settlement_rows:
-                if max_settlement_time_ms is not None and sett_time > max_settlement_time_ms:
+                if sett_time > max_settlement_time_ms:
                     continue
                 sett_time_dt = datetime.fromtimestamp(sett_time / 1000, tz=timezone.utc)
 
@@ -1347,6 +1455,21 @@ class PaperExecutionEngine:
                     round(self.portfolio.get("gross_leverage", 0.0), 2),
                     round(self.portfolio.get("net_leverage", 0.0), 2)
                 ))
+
+            # Non-exit candle atomicity: insert processed candle marker in the exact same transaction
+            if processed_candle_info:
+                conn.execute("""
+                INSERT OR IGNORE INTO processed_1m_candles (
+                    strategy_id, symbol, open_time, close_time, processed_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """, (
+                    processed_candle_info["strategy_id"],
+                    processed_candle_info["symbol"],
+                    int(processed_candle_info["open_time"]),
+                    int(processed_candle_info["close_time"]),
+                    processed_candle_info.get("processed_at", now_str)
+                ))
+
             conn.commit()
 
         # Issue 6 & Section B: Update in-memory state ONLY AFTER successful database commit
@@ -1357,6 +1480,7 @@ class PaperExecutionEngine:
                 self.portfolio["peak_equity"] = self.portfolio["equity"]
             peak = self.portfolio["peak_equity"]
             self.portfolio["drawdown_pct"] = ((peak - self.portfolio["equity"]) / peak * 100.0) if peak > 0 else 0.0
+            self._record_snapshot_tracker()
 
         for pos, payment, strat_id, sym, f_rate, sett_time_dt in pending_payments:
             pos["accumulated_funding"] += payment

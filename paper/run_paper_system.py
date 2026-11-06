@@ -21,6 +21,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from contextlib import closing
 
 # Set up paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -149,8 +150,7 @@ def cmd_status():
     # 2. Market Data Ingestion & Stream Freshness
     print("\n[Market Data Ingestion & Stream Freshness]")
     if os.path.exists(MARKET_DB_PATH):
-        conn = sqlite3.connect(MARKET_DB_PATH)
-        try:
+        with closing(sqlite3.connect(MARKET_DB_PATH)) as conn:
             cur = conn.cursor()
 
             # Completed 1m klines
@@ -197,9 +197,6 @@ def cmd_status():
             for sym, f_cnt, f_time, f_rate in f_rows:
                 f_dt = datetime.fromtimestamp(f_time / 1000, tz=timezone.utc)
                 print(f"  {sym} Funding:    {f_cnt} settlements | Latest Rate: {f_rate*100:+.4f}% at {f_dt.strftime('%Y-%m-%d %H:%M UTC')}")
-
-        finally:
-            conn.close()
     else:
         print(f"  Database not found at {MARKET_DB_PATH}")
 
@@ -223,8 +220,7 @@ def cmd_status():
     # 4. Portfolio & Risk Manager Status
     print("\n[Paper Portfolio & Risk Metrics]")
     if os.path.exists(PAPER_DB_PATH):
-        conn = sqlite3.connect(PAPER_DB_PATH)
-        try:
+        with closing(sqlite3.connect(PAPER_DB_PATH)) as conn:
             cur = conn.cursor()
             cur.execute("""
             SELECT cash_balance, equity, realized_pnl, unrealized_pnl, peak_equity, drawdown_pct, gross_leverage, net_leverage
@@ -263,9 +259,6 @@ def cmd_status():
                     print(f"  {st}: {count}")
             else:
                 print("  No completed 4H candle evaluations recorded yet.")
-
-        finally:
-            conn.close()
     else:
         print(f"  Database not found at {PAPER_DB_PATH}")
 
@@ -282,8 +275,7 @@ def cmd_inspect_signals(limit: int = 20):
         print("Paper database does not exist.")
         return
 
-    conn = sqlite3.connect(PAPER_DB_PATH)
-    try:
+    with closing(sqlite3.connect(PAPER_DB_PATH)) as conn:
         cur = conn.cursor()
         cur.execute("""
         SELECT candle_close_time, strategy_id, symbol, signal_type, close_price, ema_50, vol_ratio, rejection_reason
@@ -305,8 +297,6 @@ def cmd_inspect_signals(limit: int = 20):
             vol_r = f"{r[6]:.2f}" if r[6] is not None else "-"
             reason = r[7] or "Valid Signal"
             print(f"{close_dt:<24} | {strat:<20} | {sym:<8} | {stype:<8} | {close_px:<8} | {vol_r:<6} | {reason}")
-    finally:
-        conn.close()
 
 
 def cmd_inspect_positions():
@@ -319,8 +309,7 @@ def cmd_inspect_positions():
         print("Paper database does not exist.")
         return
 
-    conn = sqlite3.connect(PAPER_DB_PATH)
-    try:
+    with closing(sqlite3.connect(PAPER_DB_PATH)) as conn:
         cur = conn.cursor()
         cur.execute("""
         SELECT trade_id, strategy_id, symbol, side, entry_price, exit_price, quantity,
@@ -345,8 +334,6 @@ def cmd_inspect_positions():
                 net_pnl = f"${r[11]:+.2f}"
                 reason = r[12]
                 print(f"{tid:<10} | {strat:<18} | {side:<5} | {epx:<8} | {xpx:<8} | {dir_pnl:<9} | {fund_pnl:<9} | {fees:<7} | {net_pnl:<9} | {reason}")
-    finally:
-        conn.close()
 
 
 def cmd_stop():

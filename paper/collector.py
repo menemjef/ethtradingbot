@@ -27,6 +27,7 @@ import urllib.request
 import urllib.error
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
+from contextlib import closing
 
 from paper.config import (
     MARKET_DB_PATH,
@@ -53,6 +54,29 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+class ManagedConnection:
+    """
+    Context manager wrapper around sqlite3.Connection that ensures the underlying
+    database connection is ALWAYS closed upon context manager exit, resolving
+    resource leakage across long-running processes.
+    """
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self._conn.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 
 class MarketDataCollector:
@@ -124,11 +148,11 @@ class MarketDataCollector:
         self._init_db()
         self._load_cached_contract_specs()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
-        return conn
+        return ManagedConnection(conn)
 
     def _init_db(self):
         """Initializes SQLite schema for market data persistence."""
