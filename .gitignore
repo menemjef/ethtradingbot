@@ -56,3 +56,5 @@ data/backups/
 *.db
 *.db-wal
 *.db-shm
+data/binance_vision/
+data/cache/
