@@ -53,7 +53,10 @@ from utils.quant_evaluation import (
     compute_continuous_portfolio_metrics,
     compute_reconciled_trade_metrics,
     compute_deflated_sharpe_ratio,
-    compute_probability_of_backtest_overfitting
+    compute_probability_of_backtest_overfitting,
+    validate_ohlcv_timestamps,
+    resample_completed_ohlcv,
+    validate_walk_forward_segmentation,
 )
 
 
@@ -85,26 +88,27 @@ def compute_wilson_score_interval(successes: int, trials: int, confidence: float
 # 1. MULTI-TIMEFRAME RESAMPLING & INDICATOR CALCULATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_multitimeframe_features(df_1h: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_multitimeframe_features(
+    df_1h: pd.DataFrame,
+    include_6h: bool = False,
+    reference_now: Optional[pd.Timestamp] = None,
+) -> Tuple[pd.DataFrame, ...]:
     """
-    Constructs causal multi-timeframe feature frames for 1H, 4H, and 1D.
-    Guarantees that 4H and 1D features use only COMPLETED historical candles.
+    Constructs causal multi-timeframe feature frames for 1H, 4H, and 1D (plus optional 6H).
+    Guarantees that 4H, 6H, and 1D features use only COMPLETED historical candles.
+    Validates UTC timestamps, closed bars, no duplicate timestamps, and no missing 1H gaps.
     """
+    validate_ohlcv_timestamps(df_1h, expected_freq="1h", reference_now=reference_now)
     df_1h = df_1h.copy().sort_index()
 
-    # Resample to 4H (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
-    counts_4h = df_1h["close"].resample("4h", closed="left", label="left").count()
-    df_4h = df_1h.resample("4h", closed="left", label="left").agg({
-        "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
-    })
-    df_4h = df_4h[counts_4h == 4].copy()
+    # Resample to 4H (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC) — strictly completed 4-bar buckets
+    df_4h = resample_completed_ohlcv(df_1h, target_freq="4h", base_freq="1h")
 
-    # Resample to 1D (00:00 to 00:00 UTC)
-    counts_1d = df_1h["close"].resample("1D", closed="left", label="left").count()
-    df_1d = df_1h.resample("1D", closed="left", label="left").agg({
-        "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
-    })
-    df_1d = df_1d[counts_1d == 24].copy()
+    # Optional 6H resampling (00:00, 06:00, 12:00, 18:00 UTC) — strictly completed 6-bar buckets
+    df_6h = resample_completed_ohlcv(df_1h, target_freq="6h", base_freq="1h") if include_6h else None
+
+    # Resample to 1D (00:00 to 00:00 UTC) — strictly completed 24-bar buckets
+    df_1d = resample_completed_ohlcv(df_1h, target_freq="1D", base_freq="1h")
 
     # ─── 1D Features (Daily Trend Context) ───
     df_1d["ema_20"] = df_1d["close"].ewm(span=20, adjust=False).mean()
@@ -190,10 +194,11 @@ def build_multitimeframe_features(df_1h: pd.DataFrame) -> Tuple[pd.DataFrame, pd
     df_4h["last_swing_high"] = df_4h["last_swing_high"].ffill()
     df_4h["last_swing_low"] = df_4h["last_swing_low"].ffill()
 
-    # Merge Shifted 1D Context onto 4H Data
-    df_1d_shifted = df_1d.shift(1)
+    # Merge Completed 1D Context onto 4H Data (indexed by 1D close timestamp d + 1 day)
     cols_1d = ["trend_bullish", "trend_bearish", "adx_14", "ema_50", "ema_200"]
-    df_1d_sub = df_1d_shifted[cols_1d].rename(columns={c: f"1d_{c}" for c in cols_1d})
+    df_1d_completed = df_1d[cols_1d].copy()
+    df_1d_completed.index = df_1d_completed.index + pd.Timedelta(days=1)
+    df_1d_sub = df_1d_completed.rename(columns={c: f"1d_{c}" for c in cols_1d})
     df_4h = df_4h.join(df_1d_sub.reindex(df_4h.index, method="ffill"))
 
     # 1H ATR for intra-bar execution
@@ -203,6 +208,8 @@ def build_multitimeframe_features(df_1h: pd.DataFrame) -> Tuple[pd.DataFrame, pd
     tr_1h = pd.concat([tr1_1h, tr2_1h, tr3_1h], axis=1).max(axis=1)
     df_1h["atr_14"] = tr_1h.ewm(alpha=1/14, adjust=False).mean()
 
+    if include_6h:
+        return df_1h, df_4h, df_6h, df_1d
     return df_1h, df_4h, df_1d
 
 
@@ -541,7 +548,8 @@ def simulate_swing_trades_conservative(
     risk_pct: float = 0.025,
     max_leverage: float = 3.0,
     max_concurrent_positions: int = 1,
-    force_close_at_end: bool = True
+    force_close_at_end: bool = True,
+    symbol: str = "ETHUSDT",
 ) -> Tuple[List[Dict[str, Any]], pd.Series, pd.Series, Dict[str, Any]]:
     """
     Conservative Swing Execution Engine with Intrabar State Machine:
@@ -551,7 +559,8 @@ def simulate_swing_trades_conservative(
     4. Trailing stop causality: stop level entering bar is strictly evaluated against prior established extremes.
     5. Hourly mark-to-market lowest tick equity: records worst intra-bar tick for exact max drawdown.
     6. Exit/entry same-timestamp ordering: cleans active position before evaluating new entry, avoiding double margin.
-    7. Funding reconciliation: applies side * rate for all 00, 08, 16 UTC settlements; tracks audit stats.
+    7. Funding reconciliation: applies side * rate for all settlements while open; tracks audit stats.
+    8. Symbol-agnostic execution: symbol is parameterized and recorded on every trade.
     """
     timestamps_1h = df_1h.index
     opens_1h = df_1h["open"].values
@@ -561,18 +570,19 @@ def simulate_swing_trades_conservative(
     atrs_1h = df_1h["atr_14"].values
     n_1h = len(df_1h)
 
-    # Pre-map 4H triggers to 1H execution timestamp (actionable at 4H candle close)
+    # Pre-map 4H triggers to 1H execution timestamp (actionable at 4H candle close = ts_4h[k] + 4h)
     sig_long_4h = df_4h_signals["signal_long"].values
     sig_short_4h = df_4h_signals["signal_short"].values
     sl_4h = df_4h_signals["stop_price"].values
     tp_4h = df_4h_signals["target_price"].values
     ts_4h = df_4h_signals.index
+    ts_1h_set = set(timestamps_1h)
 
     trigger_map = {}
-    for k in range(len(df_4h_signals) - 1):
-        exec_t = ts_4h[k + 1]
+    for k in range(len(df_4h_signals)):
+        exec_t = ts_4h[k] + pd.Timedelta(hours=4)
         # Only map if exec_t falls within this 1H evaluation window
-        if exec_t in timestamps_1h:
+        if exec_t in ts_1h_set:
             if sig_long_4h[k]:
                 trigger_map[exec_t] = {
                     "side": 1,
@@ -601,14 +611,17 @@ def simulate_swing_trades_conservative(
     fee_exit = taker_fee
     slip_exit = slippage
 
-    # Settlement audit counters
-    funding_audit = {
+    # Settlement & accounting audit counters
+    funding_audit: Dict[str, Any] = {
         "expected_settlements": 0,
         "matched_settlements": 0,
         "missed_settlements": 0,
         "applied_settlements": 0,
-        "total_funding_usd": 0.0
+        "total_funding_usd": 0.0,
     }
+    max_abs_equity_identity_error = 0.0
+    min_free_cash = float(initial_capital)
+    max_effective_leverage_seen = 0.0
 
     for i in range(n_1h):
         curr_t = timestamps_1h[i]
@@ -618,7 +631,7 @@ def simulate_swing_trades_conservative(
         curr_close = closes_1h[i]
         curr_atr = atrs_1h[i] if not np.isnan(atrs_1h[i]) else 20.0
 
-        is_funding_hour = (curr_t.hour in (0, 8, 16) and curr_t.minute == 0)
+        is_funding_hour = (curr_t.hour in (0, 8, 16) and curr_t.minute == 0) or (curr_t in funding_map)
         curr_funding_rate = 0.0
         if is_funding_hour:
             funding_audit["expected_settlements"] += len(active_positions)
@@ -709,6 +722,7 @@ def simulate_swing_trades_conservative(
 
                 completed_trades.append({
                     "trade_id": trade_id,
+                    "symbol": symbol,
                     "fold": fold_id if fold_id is not None else 0,
                     "strategy": strategy_name or pos.get("strategy", ""),
                     "decision_time": str(pos["dec_time"]),
@@ -763,123 +777,133 @@ def simulate_swing_trades_conservative(
 
             if not np.isnan(sl_cand) and sl_cand > 0:
                 entry_exec_p = curr_open * (1.0 + slip_entry) if side == 1 else curr_open * (1.0 - slip_entry)
+                used_margin = sum(p["notional"] / max_leverage for p in active_positions)
+                avail_cash = max(0.0, account_equity - used_margin)
 
                 sizing = calculate_actual_stop_position_sizing(
                     account_equity=account_equity,
                     entry_price=entry_exec_p,
                     stop_price=sl_cand,
                     risk_pct=risk_pct,
-                    max_leverage=max_leverage
+                    max_leverage=max_leverage,
+                    available_cash=avail_cash,
                 )
 
-                # Entry Bar Immediate SL/TP Check
-                entry_gap_sl = (curr_open <= sl_cand) if side == 1 else (curr_open >= sl_cand)
-                entry_hit_sl = (curr_low <= sl_cand) if side == 1 else (curr_high >= sl_cand)
-                entry_hit_tp = (curr_high >= tp_cand) if side == 1 else (curr_low <= tp_cand)
+                if sizing["notional"] > 0.0:
+                    max_effective_leverage_seen = max(max_effective_leverage_seen, float(sizing["effective_leverage"]))
 
-                if entry_gap_sl or entry_hit_sl or entry_hit_tp:
-                    # Immediate Intra-bar Exit on Entry Bar!
-                    trade_id += 1
-                    if entry_gap_sl:
-                        ex_reason = "stop_loss_gap"
-                        raw_ex = curr_open
-                    elif entry_hit_sl and entry_hit_tp:
-                        ex_reason = "stop_loss_collision"  # Stop-first
-                        raw_ex = sl_cand
-                    elif entry_hit_sl:
-                        ex_reason = "stop_loss"
-                        raw_ex = sl_cand
+                    # Entry Bar Immediate SL/TP Check
+                    entry_gap_sl = (curr_open <= sl_cand) if side == 1 else (curr_open >= sl_cand)
+                    entry_hit_sl = (curr_low <= sl_cand) if side == 1 else (curr_high >= sl_cand)
+                    entry_hit_tp = (curr_high >= tp_cand) if side == 1 else (curr_low <= tp_cand)
+
+                    if entry_gap_sl or entry_hit_sl or entry_hit_tp:
+                        # Immediate Intra-bar Exit on Entry Bar!
+                        trade_id += 1
+                        if entry_gap_sl:
+                            ex_reason = "stop_loss_gap"
+                            raw_ex = curr_open
+                        elif entry_hit_sl and entry_hit_tp:
+                            ex_reason = "stop_loss_collision"  # Stop-first
+                            raw_ex = sl_cand
+                        elif entry_hit_sl:
+                            ex_reason = "stop_loss"
+                            raw_ex = sl_cand
+                        else:
+                            ex_reason = "take_profit"
+                            raw_ex = tp_cand
+
+                        actual_ex = raw_ex * (1.0 - slip_exit) if side == 1 else raw_ex * (1.0 + slip_exit)
+                        tot_fees = fee_entry + fee_exit
+                        tot_slip = slip_entry + slip_exit
+                        funding_drag = 0.0
+
+                        if is_funding_hour and curr_funding_rate != 0.0:
+                            funding_drag = side * curr_funding_rate
+                            funding_audit["applied_settlements"] += 1
+                            funding_audit["matched_settlements"] += 1
+                            funding_audit["expected_settlements"] += 1
+
+                        net_ret = float(side * ((actual_ex - entry_exec_p) / entry_exec_p) - tot_fees - funding_drag)
+                        trade_pnl = sizing["notional"] * net_ret
+                        account_equity += trade_pnl
+                        funding_audit["total_funding_usd"] += sizing["notional"] * funding_drag
+
+                        mfe = max(0.0, (curr_high - entry_exec_p) / entry_exec_p if side == 1 else (entry_exec_p - curr_low) / entry_exec_p)
+                        mae = max(0.0, (entry_exec_p - curr_low) / entry_exec_p if side == 1 else (curr_high - entry_exec_p) / entry_exec_p)
+
+                        completed_trades.append({
+                            "trade_id": trade_id,
+                            "symbol": symbol,
+                            "fold": fold_id if fold_id is not None else 0,
+                            "strategy": strategy_name,
+                            "decision_time": str(trig["dec_time"]),
+                            "entry_time": str(curr_t),
+                            "exit_time": str(curr_t),
+                            "holding_bars": 0,
+                            "side": "LONG" if side == 1 else "SHORT",
+                            "entry_price": float(entry_exec_p),
+                            "exit_price": float(actual_ex),
+                            "stop_price": float(sl_cand),
+                            "actual_stop_distance_pct": float(sizing["stop_distance_pct"]),
+                            "effective_leverage": float(sizing["effective_leverage"]),
+                            "notional": float(sizing["notional"]),
+                            "exit_reason": ex_reason,
+                            "gross_return": float(side * ((raw_ex - entry_exec_p) / entry_exec_p)),
+                            "net_return": float(net_ret),
+                            "entry_fee_cost": float(fee_entry),
+                            "exit_fee_cost": float(fee_exit),
+                            "total_slippage_cost": float(tot_slip),
+                            "funding_cost": float(funding_drag),
+                            "mfe": float(mfe),
+                            "mae": float(mae),
+                            "surrendered_profit": float(max(0.0, mfe - net_ret)),
+                            "trade_pnl_usd": float(trade_pnl),
+                            "account_equity_after": float(account_equity)
+                        })
                     else:
-                        ex_reason = "take_profit"
-                        raw_ex = tp_cand
+                        # Position survived entry bar — add to active
+                        init_f_drag = 0.0
+                        f_cnt = 0
+                        if is_funding_hour and curr_funding_rate != 0.0:
+                            init_f_drag = side * curr_funding_rate
+                            f_cnt = 1
+                            funding_audit["applied_settlements"] += 1
+                            funding_audit["matched_settlements"] += 1
+                            funding_audit["expected_settlements"] += 1
 
-                    actual_ex = raw_ex * (1.0 - slip_exit) if side == 1 else raw_ex * (1.0 + slip_exit)
-                    tot_fees = fee_entry + fee_exit
-                    tot_slip = slip_entry + slip_exit
-                    funding_drag = 0.0
+                        active_positions.append({
+                            "entry_bar": i,
+                            "dec_time": trig["dec_time"],
+                            "entry_time": curr_t,
+                            "side": side,
+                            "entry_price": float(entry_exec_p),
+                            "initial_sl": float(sl_cand),
+                            "stop_price": float(sl_cand),
+                            "target_price": float(tp_cand) if not np.isnan(tp_cand) else (
+                                entry_exec_p + 3.0 * curr_atr if side == 1 else entry_exec_p - 3.0 * curr_atr
+                            ),
+                            "highest_price": float(max(entry_exec_p, curr_high)),
+                            "lowest_price": float(min(entry_exec_p, curr_low)),
+                            "stop_dist_pct": float(sizing["stop_distance_pct"]),
+                            "leverage": float(sizing["effective_leverage"]),
+                            "notional": float(sizing["notional"]),
+                            "margin_locked": float(sizing["margin_required"]),
+                            "entry_fee": float(fee_entry),
+                            "entry_slip": float(slip_entry),
+                            "funding_drag": float(init_f_drag),
+                            "funding_count": f_cnt
+                        })
 
-                    if is_funding_hour and curr_funding_rate != 0.0:
-                        funding_drag = side * curr_funding_rate
-                        funding_audit["applied_settlements"] += 1
-                        funding_audit["matched_settlements"] += 1
-                        funding_audit["expected_settlements"] += 1
-
-                    net_ret = float(side * ((actual_ex - entry_exec_p) / entry_exec_p) - tot_fees - funding_drag)
-                    trade_pnl = sizing["notional"] * net_ret
-                    account_equity += trade_pnl
-                    funding_audit["total_funding_usd"] += sizing["notional"] * funding_drag
-
-                    mfe = max(0.0, (curr_high - entry_exec_p) / entry_exec_p if side == 1 else (entry_exec_p - curr_low) / entry_exec_p)
-                    mae = max(0.0, (entry_exec_p - curr_low) / entry_exec_p if side == 1 else (curr_high - entry_exec_p) / entry_exec_p)
-
-                    completed_trades.append({
-                        "trade_id": trade_id,
-                        "fold": fold_id if fold_id is not None else 0,
-                        "strategy": strategy_name,
-                        "decision_time": str(trig["dec_time"]),
-                        "entry_time": str(curr_t),
-                        "exit_time": str(curr_t),
-                        "holding_bars": 0,
-                        "side": "LONG" if side == 1 else "SHORT",
-                        "entry_price": float(entry_exec_p),
-                        "exit_price": float(actual_ex),
-                        "stop_price": float(sl_cand),
-                        "actual_stop_distance_pct": float(sizing["stop_distance_pct"]),
-                        "effective_leverage": float(sizing["effective_leverage"]),
-                        "notional": float(sizing["notional"]),
-                        "exit_reason": ex_reason,
-                        "gross_return": float(side * ((raw_ex - entry_exec_p) / entry_exec_p)),
-                        "net_return": float(net_ret),
-                        "entry_fee_cost": float(fee_entry),
-                        "exit_fee_cost": float(fee_exit),
-                        "total_slippage_cost": float(tot_slip),
-                        "funding_cost": float(funding_drag),
-                        "mfe": float(mfe),
-                        "mae": float(mae),
-                        "surrendered_profit": float(max(0.0, mfe - net_ret)),
-                        "trade_pnl_usd": float(trade_pnl),
-                        "account_equity_after": float(account_equity)
-                    })
-                else:
-                    # Position survived entry bar — add to active
-                    init_f_drag = 0.0
-                    f_cnt = 0
-                    if is_funding_hour and curr_funding_rate != 0.0:
-                        init_f_drag = side * curr_funding_rate
-                        f_cnt = 1
-                        funding_audit["applied_settlements"] += 1
-                        funding_audit["matched_settlements"] += 1
-                        funding_audit["expected_settlements"] += 1
-
-                    active_positions.append({
-                        "entry_bar": i,
-                        "dec_time": trig["dec_time"],
-                        "entry_time": curr_t,
-                        "side": side,
-                        "entry_price": float(entry_exec_p),
-                        "initial_sl": float(sl_cand),
-                        "stop_price": float(sl_cand),
-                        "target_price": float(tp_cand) if not np.isnan(tp_cand) else (
-                            entry_exec_p + 3.0 * curr_atr if side == 1 else entry_exec_p - 3.0 * curr_atr
-                        ),
-                        "highest_price": float(max(entry_exec_p, curr_high)),
-                        "lowest_price": float(min(entry_exec_p, curr_low)),
-                        "stop_dist_pct": float(sizing["stop_distance_pct"]),
-                        "leverage": float(sizing["effective_leverage"]),
-                        "notional": float(sizing["notional"]),
-                        "entry_fee": float(fee_entry),
-                        "entry_slip": float(slip_entry),
-                        "funding_drag": float(init_f_drag),
-                        "funding_count": f_cnt
-                    })
-
-        # ─── 3. Intra-bar Mark-to-Market Equity Calculation ───
+        # ─── 3. Intra-bar Mark-to-Market Equity & Accounting Invariant Check ───
         open_unrealized_pnl_close = 0.0
         open_unrealized_pnl_worst = 0.0
+        locked_margin_total = 0.0
 
         for pos in active_positions:
             side = pos["side"]
             notional = pos["notional"]
+            locked_margin_total += float(pos.get("margin_locked", notional / max_leverage))
             # Close unrealized
             unreal_close = side * ((curr_close - pos["entry_price"]) / pos["entry_price"]) - pos["entry_fee"] - pos["funding_drag"]
             open_unrealized_pnl_close += notional * unreal_close
@@ -889,40 +913,69 @@ def simulate_swing_trades_conservative(
             unreal_worst = side * ((worst_p - pos["entry_price"]) / pos["entry_price"]) - pos["entry_fee"] - pos["funding_drag"]
             open_unrealized_pnl_worst += notional * unreal_worst
 
+        free_cash = account_equity - locked_margin_total
+        min_free_cash = min(min_free_cash, free_cash)
+
         hourly_equity[i] = account_equity + open_unrealized_pnl_close
         hourly_lowest_equity[i] = account_equity + open_unrealized_pnl_worst
 
+        identity_err = abs(hourly_equity[i] - (free_cash + locked_margin_total + open_unrealized_pnl_close))
+        max_abs_equity_identity_error = max(max_abs_equity_identity_error, float(identity_err))
+
     eq_series = pd.Series(hourly_equity, index=timestamps_1h)
     eq_lowest_series = pd.Series(hourly_lowest_equity, index=timestamps_1h)
+
+    final_eq = float(eq_series.iloc[-1]) if len(eq_series) > 0 else float(initial_capital)
+    sum_trade_pnl = sum(float(t["trade_pnl_usd"]) for t in completed_trades)
+    funding_audit["accounting_audit"] = {
+        "max_abs_equity_identity_error": round(float(max_abs_equity_identity_error), 12),
+        "min_free_cash": round(float(min_free_cash), 6),
+        "max_effective_leverage": round(float(max_effective_leverage_seen), 6),
+        "sum_trade_pnl_usd": round(float(sum_trade_pnl), 6),
+        "equity_change_usd": round(float(final_eq - initial_capital), 6),
+        "pnl_reconciliation_diff_usd": round(float((final_eq - initial_capital) - sum_trade_pnl), 8),
+    }
+
     return completed_trades, eq_series, eq_lowest_series, funding_audit
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. BENCHMARK BUY-AND-HOLD ETH
+# 6. BENCHMARK BUY-AND-HOLD (SYMBOL-AGNOSTIC)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_buy_and_hold_equity(df_1h: pd.DataFrame, initial_capital: float = 10000.0) -> pd.Series:
-    """Computes pure Buy-and-Hold ETH 1x unleveraged spot/futures curve."""
+def compute_buy_and_hold_equity(
+    df_1h: pd.DataFrame,
+    initial_capital: float = 10000.0,
+    symbol: str = "ETHUSDT",
+) -> pd.Series:
+    """Computes pure Buy-and-Hold 1x unleveraged spot/futures curve for the given symbol."""
     closes = df_1h["close"].values
     if len(closes) == 0:
         return pd.Series([], dtype=float)
     eq = initial_capital * (closes / closes[0])
-    return pd.Series(eq, index=df_1h.index)
+    return pd.Series(eq, index=df_1h.index, name=symbol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. MAIN ORCHESTRATION PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_phase_2_1_pipeline():
+def run_phase_2_1_pipeline(
+    symbol: str = "ETHUSDT",
+    data_path: Optional[str] = None,
+    funding_path: Optional[str] = None,
+):
     start_time_all = time.time()
     print("=" * 80)
-    print("QUANT RESEARCH PHASE 2.1: BACKTEST INTEGRITY REPAIR & CANDIDATE REVALIDATION")
+    print(f"QUANT RESEARCH PHASE 2.1: BACKTEST INTEGRITY REPAIR & CANDIDATE REVALIDATION ({symbol})")
     print("=" * 80)
 
-    # 1. Load Data & Normalize Funding
-    data_path = os.path.join(BASE_DIR, "data", "cache", "eth_usdt_1h_3yr.parquet")
-    funding_path = os.path.join(BASE_DIR, "data", "cache", "eth_funding_3yr.parquet")
+    # 1. Load Data & Normalize Funding (symbol-parameterized)
+    base_asset = symbol.lower().replace("usdt", "").replace("/", "").replace(":", "").strip("_") or "eth"
+    if data_path is None:
+        data_path = os.path.join(BASE_DIR, "data", "cache", f"{base_asset}_usdt_1h_3yr.parquet")
+    if funding_path is None:
+        funding_path = os.path.join(BASE_DIR, "data", "cache", f"{base_asset}_funding_3yr.parquet")
 
     if not os.path.exists(data_path) or not os.path.exists(funding_path):
         raise FileNotFoundError(f"Missing required cached datasets: {data_path} or {funding_path}")
@@ -947,11 +1000,13 @@ def run_phase_2_1_pipeline():
     reg_counts = df_4h["regime"].value_counts().to_dict()
     print(f"Regime Distribution: {reg_counts}")
 
-    # 3. Rolling Volatility Transition Analysis
+    # 3. Rolling Volatility Transition Analysis (strictly restricted to Walk-Forward range prior to Holdout Fold 5)
     print("\n" + "=" * 80)
-    print("ANALYZING ROLLING VOLATILITY TRANSITIONS (NO LOOKAHEAD, WILSON CIs)")
+    print("ANALYZING ROLLING VOLATILITY TRANSITIONS (NO LOOKAHEAD, HOLDOUT EXCLUDED, WILSON CIs)")
     print("=" * 80)
-    vol_transitions = analyze_rolling_volatility_transitions(df_4h, rolling_window_bars=168)
+    wf_cutoff_ts = pd.Timestamp("2026-03-31 23:00:00+00:00")
+    df_4h_wf_only = df_4h.loc[:wf_cutoff_ts].copy()
+    vol_transitions = analyze_rolling_volatility_transitions(df_4h_wf_only, rolling_window_bars=168)
     for h_k, h_v in vol_transitions.items():
         print(f"  Horizon {h_k}: P(Exp|Comp) = {h_v['p_expansion_given_compression']}% (CI: {h_v['ci_95_p_expansion_given_compression']}) vs Uncond: {h_v['unconditional_vol_expansion_prob']}% (Edge: {h_v['volatility_predictive_edge_pct']}%) | Direction: Up {h_v['directional_breakdown_given_expansion']['upward_breakout_prob_pct']}%")
 
@@ -1011,6 +1066,13 @@ def run_phase_2_1_pipeline():
         }
     ]
 
+    validate_walk_forward_segmentation(
+        folds=folds,
+        pre_roll_end=pd.Timestamp("2023-08-31 23:00:00+00:00"),
+        purge_hours=168,
+        selection_fold_ids=[1, 2, 3, 4],
+    )
+
     for f in folds:
         s_ts = pd.Timestamp(f["eval_start"])
         e_ts = pd.Timestamp(f["eval_end"])
@@ -1069,13 +1131,14 @@ def run_phase_2_1_pipeline():
         df_1h_fold = df_1h.loc[s_ts:e_ts].copy()
         print(f"\n--- Processing Fold {f_id} ({f_type.upper()}) [{s_ts.strftime('%Y-%m-%d')} to {e_ts.strftime('%Y-%m-%d')}] ({len(df_1h_fold)} hours) ---")
 
-        # Buy and Hold ETH for this fold
-        eq_bh_fold = compute_buy_and_hold_equity(df_1h_fold)
+        # Buy and Hold for this fold
+        eq_bh_fold = compute_buy_and_hold_equity(df_1h_fold, symbol=symbol)
         met_bh_fold = compute_continuous_portfolio_metrics(eq_bh_fold, trades=[], n_trials=1)
         fold_results["Benchmark_BuyAndHold_ETH"][f_id] = {
             "metrics": met_bh_fold,
             "trades": [],
-            "equity": eq_bh_fold
+            "equity": eq_bh_fold,
+            "equity_lowest": eq_bh_fold,
         }
 
         for strat_info in strategies_to_evaluate:
@@ -1099,14 +1162,16 @@ def run_phase_2_1_pipeline():
                 risk_pct=0.025,
                 max_leverage=3.0,
                 max_concurrent_positions=1,
-                force_close_at_end=True  # Guarantees zero positions cross fold boundary
+                force_close_at_end=True,  # Guarantees zero positions cross fold boundary
+                symbol=symbol,
             )
 
-            # Compute continuous metrics for this fold
+            # Compute continuous metrics for this fold (including intrabar worst-tick lows)
             met_fold = compute_continuous_portfolio_metrics(
                 hourly_equity=eq_fold,
                 trades=trades_fold,
-                n_trials=total_trials
+                hourly_lowest_equity=eq_lowest_fold,
+                n_trials=total_trials,
             )
             # Add funding audit to metrics
             met_fold["funding_audit"] = fund_audit
@@ -1115,6 +1180,7 @@ def run_phase_2_1_pipeline():
                 "metrics": met_fold,
                 "trades": trades_fold,
                 "equity": eq_fold,
+                "equity_lowest": eq_lowest_fold,
                 "funding_audit": fund_audit
             }
 
@@ -1145,31 +1211,38 @@ def run_phase_2_1_pipeline():
     all_strategies_list = [s["name"] for s in strategies_to_evaluate] + ["Benchmark_BuyAndHold_ETH"]
 
     for s_name in all_strategies_list:
-        # Pooled OOS: Concatenate trades from folds 1..4
+        # Construct chained OOS equity curve (and worst-tick curve) across folds 1..4
         oos_trades = []
-        for fid in wf_fold_ids:
-            oos_trades.extend(fold_results[s_name][fid]["trades"])
-
-        # Construct chained OOS equity curve across folds 1..4
         oos_equity_pieces = []
+        oos_lowest_pieces = []
         compounded_base = 10000.0
         for fid in wf_fold_ids:
             eq_piece = fold_results[s_name][fid]["equity"].copy()
+            eq_low_piece = fold_results[s_name][fid].get("equity_lowest", eq_piece).copy()
+            fold_scale = compounded_base / eq_piece.iloc[0]
+            for tr in fold_results[s_name][fid]["trades"]:
+                tr_scaled = dict(tr)
+                tr_scaled["trade_pnl_usd"] = float(tr["trade_pnl_usd"]) * float(fold_scale)
+                oos_trades.append(tr_scaled)
             # Normalize piece to start at compounded_base
             norm_piece = compounded_base * (eq_piece / eq_piece.iloc[0])
+            norm_low_piece = compounded_base * (eq_low_piece / eq_piece.iloc[0])
             oos_equity_pieces.append(norm_piece)
+            oos_lowest_pieces.append(norm_low_piece)
             compounded_base = norm_piece.iloc[-1]
 
         oos_eq_series = pd.concat(oos_equity_pieces).sort_index()
-        # Drop duplicates at boundaries if any
         oos_eq_series = oos_eq_series[~oos_eq_series.index.duplicated(keep="first")]
+        oos_eq_lowest_series = pd.concat(oos_lowest_pieces).sort_index()
+        oos_eq_lowest_series = oos_eq_lowest_series[~oos_eq_lowest_series.index.duplicated(keep="first")]
 
         pooled_equity_curves[s_name] = oos_eq_series
 
         met_pooled_oos = compute_continuous_portfolio_metrics(
             hourly_equity=oos_eq_series,
             trades=oos_trades,
-            n_trials=total_trials
+            hourly_lowest_equity=oos_eq_lowest_series,
+            n_trials=total_trials,
         )
         pooled_oos_summary[s_name] = met_pooled_oos
 
@@ -1210,6 +1283,7 @@ def run_phase_2_1_pipeline():
             # Evaluate across all Walk-Forward folds 1..4 (Pooled OOS)
             h_trades = []
             h_eq_pieces = []
+            h_eq_low_pieces = []
             compounded_base = 10000.0
 
             for fid in wf_fold_ids:
@@ -1219,24 +1293,38 @@ def run_phase_2_1_pipeline():
                 df_1h_fold = df_1h.loc[s_ts:e_ts].copy()
                 sig_4h_fold = signals_dict[strat_core].loc[:e_ts].copy()
 
-                tr_h, eq_h, _, f_aud = simulate_swing_trades_conservative(
+                tr_h, eq_h, eq_low_h, f_aud = simulate_swing_trades_conservative(
                     df_1h=df_1h_fold,
                     df_4h_signals=sig_4h_fold,
                     funding_map=funding_map,
                     strategy_name=f"{strat_key}_{h_hrs}h",
                     fold_id=fid,
                     max_holding_hours=h_hrs,
-                    exit_type="fixed_atr"
+                    exit_type="fixed_atr",
+                    symbol=symbol,
                 )
-                h_trades.extend(tr_h)
+                fold_scale = compounded_base / eq_h.iloc[0]
+                for tr in tr_h:
+                    tr_scaled = dict(tr)
+                    tr_scaled["trade_pnl_usd"] = float(tr["trade_pnl_usd"]) * float(fold_scale)
+                    h_trades.append(tr_scaled)
                 norm_p = compounded_base * (eq_h / eq_h.iloc[0])
+                norm_low_p = compounded_base * (eq_low_h / eq_h.iloc[0])
                 h_eq_pieces.append(norm_p)
+                h_eq_low_pieces.append(norm_low_p)
                 compounded_base = norm_p.iloc[-1]
 
             chained_h_eq = pd.concat(h_eq_pieces).sort_index()
             chained_h_eq = chained_h_eq[~chained_h_eq.index.duplicated(keep="first")]
+            chained_h_eq_low = pd.concat(h_eq_low_pieces).sort_index()
+            chained_h_eq_low = chained_h_eq_low[~chained_h_eq_low.index.duplicated(keep="first")]
 
-            met_h = compute_continuous_portfolio_metrics(chained_h_eq, h_trades, n_trials=total_trials)
+            met_h = compute_continuous_portfolio_metrics(
+                chained_h_eq,
+                h_trades,
+                hourly_lowest_equity=chained_h_eq_low,
+                n_trials=total_trials,
+            )
             tot_fund = sum(t["funding_cost"] for t in h_trades) * 100.0 if h_trades else 0.0
 
             holding_research_results[strat_key][f"{h_hrs}h"] = {

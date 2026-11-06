@@ -124,16 +124,17 @@ def compute_slice_metrics(trade_records: list) -> dict:
     }
 
 
-def main():
+def main(symbol: str = "ETHUSDT", include_holdout: bool = False):
     print("=" * 70)
-    print("CANDIDATE A (Exp1_Momentum_Continuation_4H) EDGE ATTRIBUTION ANALYSIS")
+    print(f"CANDIDATE A (Exp1_Momentum_Continuation_4H) EDGE ATTRIBUTION ANALYSIS ({symbol})")
     print("=" * 70)
 
     # 1. Load Data
+    base_asset = symbol.lower().replace("usdt", "").replace("/", "").replace(":", "").strip("_") or "eth"
     cache_dir = os.path.join(BASE_DIR, "data", "cache")
-    eth_path = os.path.join(cache_dir, "eth_usdt_1h_3yr.parquet")
+    eth_path = os.path.join(cache_dir, f"{base_asset}_usdt_1h_3yr.parquet")
     btc_path = os.path.join(cache_dir, "btc_usdt_1h_3yr.parquet")
-    funding_path = os.path.join(cache_dir, "eth_funding_3yr.parquet")
+    funding_path = os.path.join(cache_dir, f"{base_asset}_funding_3yr.parquet")
 
     df_eth_1h = pd.read_parquet(eth_path)
     df_btc_1h = pd.read_parquet(btc_path)
@@ -228,7 +229,9 @@ def main():
     trade_log_path = os.path.join(BASE_DIR, "research", "phase_2_1_fold_trade_log.csv")
     df_trades_all = pd.read_csv(trade_log_path)
     df_trades = df_trades_all[df_trades_all["strategy"] == "Exp1_Momentum_Continuation_4H"].copy()
-    print(f"Loaded {len(df_trades)} Walk-Forward Trades for Exp1_Momentum_Continuation_4H")
+    if not include_holdout and "fold" in df_trades.columns:
+        df_trades = df_trades[df_trades["fold"].isin([1, 2, 3, 4])].copy()
+    print(f"Loaded {len(df_trades)} Walk-Forward Trades for Exp1_Momentum_Continuation_4H (include_holdout={include_holdout})")
 
     # 4. Enrich Each Trade with Causal Entry Features and Intratrade Path Trajectory
     attributed_trades = []

@@ -25,30 +25,41 @@ def calculate_actual_stop_position_sizing(
     stop_price: float,
     risk_pct: float = 0.025,
     max_leverage: float = 3.0,
-    min_stop_pct: float = 0.005
+    min_stop_pct: float = 0.005,
+    available_cash: Optional[float] = None
 ) -> Dict[str, float]:
     """
     Position sizing based on ACTUAL stop loss distance:
     RiskDollar = account_equity * risk_pct
     StopDistancePct = max(min_stop_pct, abs(entry_price - stop_price) / entry_price)
-    Notional = min(RiskDollar / StopDistancePct, account_equity * max_leverage)
+    Notional = min(RiskDollar / StopDistancePct, effective_capital * max_leverage)
     EffectiveLeverage = Notional / account_equity
     """
-    if account_equity <= 0 or entry_price <= 0:
-        return {"notional": 0.0, "position_size": 0.0, "effective_leverage": 0.0, "stop_distance_pct": 0.0}
+    eff_cash = account_equity if available_cash is None else min(account_equity, available_cash)
+    if account_equity <= 0 or entry_price <= 0 or eff_cash <= 0 or max_leverage <= 0:
+        return {
+            "notional": 0.0,
+            "position_size": 0.0,
+            "effective_leverage": 0.0,
+            "stop_distance_pct": 0.0,
+            "margin_required": 0.0
+        }
 
     stop_dist = max(min_stop_pct, abs(entry_price - stop_price) / entry_price) if stop_price > 0 else min_stop_pct
     risk_dollar = account_equity * risk_pct
     notional_raw = risk_dollar / stop_dist
-    notional = min(notional_raw, account_equity * max_leverage)
+    max_notional_by_cap = min(account_equity * max_leverage, eff_cash * max_leverage)
+    notional = min(notional_raw, max_notional_by_cap)
     pos_size = notional / entry_price
     eff_lev = notional / account_equity
+    margin_req = notional / max_leverage
 
     return {
         "notional": float(notional),
         "position_size": float(pos_size),
         "effective_leverage": float(eff_lev),
-        "stop_distance_pct": float(stop_dist)
+        "stop_distance_pct": float(stop_dist),
+        "margin_required": float(margin_req)
     }
 
 
@@ -512,7 +523,7 @@ def compute_continuous_portfolio_metrics(
     # Continuous Intratrade Mark-to-Market Drawdown (lowest tick aware)
     peaks = np.maximum.accumulate(eq)
     if hourly_lowest_equity is not None and len(hourly_lowest_equity) == len(eq):
-        lowest_vals = hourly_lowest_equity.values.astype(np.float64)
+        lowest_vals = np.minimum(eq, hourly_lowest_equity.values.astype(np.float64))
         drawdowns = (peaks - lowest_vals) / np.where(peaks == 0, 1e-6, peaks) * 100.0
     else:
         drawdowns = (peaks - eq) / np.where(peaks == 0, 1e-6, peaks) * 100.0
@@ -673,11 +684,12 @@ def compute_continuous_portfolio_metrics(
         trades=trades,
         initial_capital=initial_eq,
         n_trials=n_trials,
+        seed=seed,
         calendar_duration_years=cal_years
     )
 
     # Reconciliation between trade-level PnL sum and portfolio equity change
-    sum_trade_pnl = sum(t.get("trade_pnl_usd", 0.0) for t in trades)
+    sum_trade_pnl = sum(float(t.get("trade_pnl_usd", t.get("net_pnl_usd", 0.0))) for t in trades)
     pnl_reconciliation_diff = round(abs((final_eq - initial_eq) - sum_trade_pnl), 2)
 
     return {
@@ -797,4 +809,193 @@ def compute_probability_of_backtest_overfitting(
 
     pbo = float(rank_losses / total_evals) if total_evals > 0 else 0.0
     return round(pbo, 4)
+
+
+def validate_ohlcv_timestamps(
+    df: pd.DataFrame,
+    expected_freq: str = "1h",
+    reference_time: Optional[pd.Timestamp] = None,
+    reference_now: Optional[pd.Timestamp] = None,
+    allow_empty: bool = False
+) -> bool:
+    """
+    Validates OHLCV DataFrame timestamps:
+    1. Index must be a UTC-localized pd.DatetimeIndex (tz is not None and UTC offset == 0).
+    2. Strictly monotonic increasing with zero duplicate timestamps.
+    3. Zero missing bar gaps (adjacent timestamp differences must equal expected_freq).
+    4. Closed bars only: if reference_time/reference_now is provided, every bar's close_time
+       (open_time + expected_freq) must be <= reference_time.
+    """
+    if reference_time is None and reference_now is not None:
+        reference_time = reference_now
+    if df is None or len(df) == 0:
+        if allow_empty:
+            return True
+        raise ValueError("OHLCV DataFrame is empty.")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("OHLCV index must be a pd.DatetimeIndex.")
+
+    if df.index.tz is None:
+        raise ValueError("OHLCV timestamps must be timezone-aware UTC (found timezone-naive index).")
+
+    sample_offset = df.index[0].utcoffset()
+    if sample_offset is None or sample_offset.total_seconds() != 0:
+        raise ValueError(f"OHLCV timestamps must be in UTC (found tz={df.index.tz}).")
+
+    if df.index.has_duplicates:
+        dup_ts = df.index[df.index.duplicated()].tolist()[:5]
+        raise ValueError(f"Duplicate OHLCV timestamps detected: {dup_ts}")
+
+    if not df.index.is_monotonic_increasing:
+        raise ValueError("OHLCV timestamps must be strictly monotonically increasing.")
+
+    bar_delta = pd.Timedelta(expected_freq)
+    if len(df) > 1:
+        diffs = df.index[1:] - df.index[:-1]
+        bad_gaps = diffs != bar_delta
+        if np.any(bad_gaps):
+            first_gap_idx = int(np.where(bad_gaps)[0][0])
+            t0 = df.index[first_gap_idx]
+            t1 = df.index[first_gap_idx + 1]
+            raise ValueError(
+                f"OHLCV timestamp gap detected between {t0} and {t1} "
+                f"(expected {bar_delta}, got {t1 - t0})."
+            )
+
+    if reference_time is not None:
+        ref_ts = pd.Timestamp(reference_time)
+        if ref_ts.tz is None:
+            raise ValueError("reference_time must be timezone-aware UTC.")
+        close_times = df.index + bar_delta
+        unclosed_mask = close_times > ref_ts
+        if np.any(unclosed_mask):
+            first_unclosed = df.index[int(np.where(unclosed_mask)[0][0])]
+            raise ValueError(
+                f"Unclosed bar detected at open_time={first_unclosed} "
+                f"(closes at {first_unclosed + bar_delta} > reference_time {ref_ts})."
+            )
+
+    return True
+
+
+def resample_completed_ohlcv(
+    df_lower: pd.DataFrame,
+    target_freq: str = "4h",
+    lower_freq: str = "1h",
+    base_freq: Optional[str] = None,
+    reference_time: Optional[pd.Timestamp] = None,
+    reference_now: Optional[pd.Timestamp] = None,
+) -> pd.DataFrame:
+    """
+    Aggregates lower-timeframe OHLCV bars (e.g. 1H) into higher-timeframe bars
+    (e.g. '4h', '6h', '1d') using ONLY completed lower-timeframe bars:
+    - Validates lower-timeframe bars first (UTC, closed only, no duplicates, no gaps).
+    - Requires exact constituent bar count per target bucket (e.g. 4 for 4H, 6 for 6H, 24 for 1D).
+    - Annotates 'close_time' = open_time + pd.Timedelta(target_freq).
+    """
+    if base_freq is not None:
+        lower_freq = base_freq
+    if reference_time is None and reference_now is not None:
+        reference_time = reference_now
+    validate_ohlcv_timestamps(df_lower, expected_freq=lower_freq, reference_time=reference_time)
+
+    lower_delta = pd.Timedelta(lower_freq)
+    target_delta = pd.Timedelta(target_freq)
+    if target_delta < lower_delta or (target_delta % lower_delta) != pd.Timedelta(0):
+        raise ValueError(f"target_freq ({target_freq}) must be an exact integer multiple of lower_freq ({lower_freq}).")
+
+    required_count = int(target_delta // lower_delta)
+    agg_rules = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum"
+    }
+    resampler = df_lower.resample(target_freq, closed="left", label="left")
+    df_agg = resampler.agg(agg_rules)
+    counts = df_lower["close"].resample(target_freq, closed="left", label="left").count()
+    df_completed = df_agg[counts == required_count].copy()
+    df_completed["close_time"] = df_completed.index + target_delta
+    return df_completed
+
+
+def validate_walk_forward_segmentation(
+    folds: List[Dict[str, Any]],
+    pre_roll_end: Optional[pd.Timestamp] = None,
+    purge_hours: int = 168,
+    selection_fold_ids: Optional[List[int]] = None
+) -> Dict[str, Any]:
+    """
+    Validates walk-forward segmentation and holdout isolation:
+    1. Folds are strictly chronological and non-overlapping.
+    2. Pre-roll warmup (<= pre_roll_end) is excluded from all evaluation folds.
+    3. Each fold has an explicit purge/embargo window of at least purge_hours
+       immediately preceding eval_start, with zero overlap with prior folds.
+    4. Any fold marked 'untouched_holdout' is strictly after all 'walk_forward_test' folds
+       and never appears in selection_fold_ids.
+    """
+    if not folds:
+        raise ValueError("Folds list cannot be empty.")
+
+    prev_eval_end: Optional[pd.Timestamp] = None
+    if pre_roll_end is not None:
+        prev_eval_end = pd.Timestamp(pre_roll_end)
+
+    holdout_ids = set()
+    wf_ids = set()
+
+    for idx, f in enumerate(folds):
+        fid = f["fold_id"]
+        ftype = f.get("type", "walk_forward_test")
+        p_start = pd.Timestamp(f["purge_start"])
+        p_end = pd.Timestamp(f["purge_end"])
+        e_start = pd.Timestamp(f["eval_start"])
+        e_end = pd.Timestamp(f["eval_end"])
+
+        if e_end <= e_start:
+            raise ValueError(f"Fold {fid} eval_end ({e_end}) must be > eval_start ({e_start}).")
+        if p_end >= e_start:
+            raise ValueError(f"Fold {fid} purge_end ({p_end}) overlaps with eval_start ({e_start}).")
+
+        # Inclusive 1H purge window from p_start (00:00) through p_end (23:00) spans (e_start - p_start)
+        actual_purge_hours = (e_start - p_start).total_seconds() / 3600.0
+        if actual_purge_hours < purge_hours:
+            raise ValueError(
+                f"Fold {fid} purge window is {actual_purge_hours:.1f}h, less than required {purge_hours}h."
+            )
+
+        if prev_eval_end is not None:
+            if p_start <= prev_eval_end:
+                raise ValueError(
+                    f"Fold {fid} purge_start ({p_start}) overlaps with previous boundary ({prev_eval_end})."
+                )
+            if e_start <= prev_eval_end:
+                raise ValueError(
+                    f"Fold {fid} eval_start ({e_start}) overlaps with previous fold end ({prev_eval_end})."
+                )
+
+        if ftype == "untouched_holdout":
+            holdout_ids.add(fid)
+        else:
+            if holdout_ids:
+                raise ValueError(f"Walk-forward fold {fid} cannot occur after an untouched_holdout fold.")
+            wf_ids.add(fid)
+
+        prev_eval_end = e_end
+
+    if selection_fold_ids is not None:
+        leaked = holdout_ids.intersection(set(selection_fold_ids))
+        if leaked:
+            raise ValueError(f"Untouched holdout fold(s) {sorted(leaked)} used in parameter selection!")
+
+    return {
+        "valid": True,
+        "total_folds": len(folds),
+        "walk_forward_fold_ids": sorted(wf_ids),
+        "holdout_fold_ids": sorted(holdout_ids),
+        "purge_hours_verified": purge_hours
+    }
+
 

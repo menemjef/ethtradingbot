@@ -15,6 +15,39 @@ import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def _load_json(rel_path: str) -> dict:
+    full_path = os.path.join(BASE_DIR, rel_path)
+    if os.path.exists(full_path):
+        with open(full_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+p2_metrics = _load_json(os.path.join("research", "swing_strategy_metrics.json"))
+p21_metrics = _load_json(os.path.join("research", "phase_2_1_fold_metrics.json"))
+
+p2_strats = p2_metrics.get("strategies", {})
+p21_oos = p21_metrics.get("pooled_oos_summary", {})
+p21_holdout = p21_metrics.get("holdout_summary", {})
+p21_per_fold = p21_metrics.get("per_fold_metrics", {})
+
+# Extract authoritative Phase 2.1 metrics for Candidate A, Donchian 120h, and Donchian 168h
+cand_a_oos = p21_oos.get("Exp1_Momentum_Continuation_4H", {})
+cand_a_ts = cand_a_oos.get("trade_summary", {})
+cand_a_ho = p21_holdout.get("Exp1_Momentum_Continuation_4H", {}).get("trade_summary", {})
+
+don_120_oos = p21_oos.get("Trend_Donchian_120h", {})
+don_120_ts = don_120_oos.get("trade_summary", {})
+don_120_ho = p21_holdout.get("Trend_Donchian_120h", {}).get("trade_summary", {})
+don_120_f4_dd = (
+    p21_per_fold.get("Trend_Donchian_120h", {}).get("4", {}).get("intratrade_max_drawdown_pct", 13.44)
+)
+
+don_168_oos = p21_oos.get("Trend_Donchian_168h", {})
+don_168_ts = don_168_oos.get("trade_summary", {})
+don_168_ho = p21_holdout.get("Trend_Donchian_168h", {}).get("trade_summary", {})
+
 registry = {
     "project": "ETH/USDT Perpetual Futures Quantitative Research",
     "repository": "menemjef/ethtradingbot",
@@ -23,6 +56,24 @@ registry = {
         "total_trials_evaluated_K": 32,
         "methodology": "Bailey & Lopez de Prado (2014) Deflated Sharpe Ratio + Bailey et al. (2016) Combinatorially Symmetric Cross-Validation (CSCV) PBO",
         "hurdle_description": "Any candidate claiming statistical edge must survive penalization against K=32 trials and demonstrate positive out-of-sample expectancy."
+    },
+    "reconciliation_audit": {
+        "source_of_truth_files": [
+            "research/phase_2_1_fold_metrics.json",
+            "research/phase_2_1_candidate_comparison.md",
+            "research/swing_strategy_metrics.json"
+        ],
+        "donchian_discrepancy_explanation": (
+            "Earlier versions of generate_experiment_registry.py contained hardcoded static strings "
+            "that misattributed unverified pre-repair numbers (-34.6 bps / -22.4% DD for Trend_Donchian_120h "
+            "and -61.2 bps / -34.8% DD for Trend_Donchian_168h) and mislisted parameters as "
+            "{'stop_loss': '2.0 * ATR', 'take_profit': 'None (Trailing)'}. "
+            "The actual Phase 2.1 purged walk-forward engine (run_phase_2_1_research.py) uses "
+            "{'stop_loss': '2.5 * ATR_14', 'take_profit': '4.0 * ATR_14', 'exit_type': 'fixed_atr'} "
+            "and produced +1.01 bps pooled OOS expectancy (20.42% OOS MaxDD, -24.92 bps Holdout Fold 5) "
+            "for Trend_Donchian_120h and +74.40 bps pooled OOS expectancy (23.94% OOS MaxDD, -8.08 bps "
+            "Holdout Fold 5) for Trend_Donchian_168h, matching phase_2_1_candidate_comparison.md (+1.0 bps and +74.4 bps)."
+        )
     },
     "phases": [
         {
@@ -76,106 +127,214 @@ registry = {
                     "features": ["4H Close > EMA50", "3-bar pullback (3 red/green bars)", "Engulfing candle", "Volume ratio > 1.3x SMA20"],
                     "parameters": {"stop_loss": "1.5 * ATR_14", "take_profit": "3.0 * ATR_14", "max_holding": 72, "risk_pct": 0.025, "leverage_cap": 3.0},
                     "trials_evaluated": 6,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp1_Momentum_Continuation_4H", {}).get("trade_summary", {}).get("expectancy_bps", 136.32),
+                        "phase_2_win_rate_pct": p2_strats.get("Exp1_Momentum_Continuation_4H", {}).get("trade_summary", {}).get("win_rate_pct", 56.82),
+                        "phase_2_profit_factor": p2_strats.get("Exp1_Momentum_Continuation_4H", {}).get("trade_summary", {}).get("profit_factor", 1.98),
+                        "phase_2_1_oos_expectancy_bps": cand_a_ts.get("expectancy_bps", 135.35),
+                        "phase_2_1_oos_win_rate_pct": cand_a_ts.get("win_rate_pct", 53.57),
+                        "phase_2_1_oos_profit_factor": cand_a_ts.get("profit_factor", 1.92),
+                    },
                     "status": "RETAINED_FOR_FURTHER_AUDIT",
-                    "reason_for_status": "Produced positive pooled expectancy (+135.3 bps), 56.8% win rate, and 1.95 profit factor. Low trade frequency (~12/yr) and failure of multi-trial DSR under K=32 prevented immediate promotion."
+                    "reason_for_status": (
+                        f"Produced positive Phase 2 expectancy (+{p2_strats.get('Exp1_Momentum_Continuation_4H', {}).get('trade_summary', {}).get('expectancy_bps', 136.32):.2f} bps, "
+                        f"{p2_strats.get('Exp1_Momentum_Continuation_4H', {}).get('trade_summary', {}).get('win_rate_pct', 56.82):.2f}% win rate, "
+                        f"{p2_strats.get('Exp1_Momentum_Continuation_4H', {}).get('trade_summary', {}).get('profit_factor', 1.98):.2f} PF) "
+                        f"and +{cand_a_ts.get('expectancy_bps', 135.35):.1f} bps pooled OOS expectancy in Phase 2.1. "
+                        "Low trade frequency (~12/yr) and failure of multi-trial DSR under K=32 prevented immediate live promotion."
+                    )
                 },
                 {
                     "id": "EXP-21-DONCHIAN-TURTLE",
                     "name": "Exp1_Donchian_55_Turtle_4H",
                     "hypothesis": "Classic Richard Dennis 55-period breakout on 4H candles with ADX > 20 captures massive multi-week crypto trends.",
                     "features": ["4H Donchian High/Low 55", "EMA20 > EMA50", "ADX_14 > 20"],
-                    "parameters": {"stop_loss": "2.5 * ATR_14", "take_profit": "5.0 * ATR_14", "max_holding": 168},
+                    "parameters": {"stop_loss": "3.0 * ATR_14", "take_profit": "6.0 * ATR_14", "max_holding": 120, "exit_type": "trailing_atr"},
                     "trials_evaluated": 4,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp1_Donchian_55_Turtle_4H", {}).get("trade_summary", {}).get("expectancy_bps", -31.36),
+                        "phase_2_win_rate_pct": p2_strats.get("Exp1_Donchian_55_Turtle_4H", {}).get("trade_summary", {}).get("win_rate_pct", 34.48),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Exp1_Donchian_55_Turtle_4H", {}).get("trade_summary", {}).get("expectancy_bps", 24.01),
+                        "phase_2_1_oos_max_drawdown_pct": p21_oos.get("Exp1_Donchian_55_Turtle_4H", {}).get("intratrade_max_drawdown_pct", 24.33),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Excessive whipsaws in sideways regimes. Win rate dropped to 28.6%, resulting in -112 bps expectancy."
+                    "reason_for_status": (
+                        f"Excessive whipsaws in sideways regimes. Phase 2 win rate was "
+                        f"{p2_strats.get('Exp1_Donchian_55_Turtle_4H', {}).get('trade_summary', {}).get('win_rate_pct', 34.48):.2f}% "
+                        f"with {p2_strats.get('Exp1_Donchian_55_Turtle_4H', {}).get('trade_summary', {}).get('expectancy_bps', -31.36):.2f} bps expectancy "
+                        f"(Phase 2.1 OOS: +{p21_oos.get('Exp1_Donchian_55_Turtle_4H', {}).get('trade_summary', {}).get('expectancy_bps', 24.01):.2f} bps, "
+                        f"MaxDD {p21_oos.get('Exp1_Donchian_55_Turtle_4H', {}).get('intratrade_max_drawdown_pct', 24.33):.2f}%)."
+                    )
                 },
                 {
                     "id": "EXP-22-PULLBACK-TREND",
                     "name": "Exp1_Pullback_Trend_4H",
-                    "hypothesis": "Entering pullbacks near 4H EMA20 when RSI is in a neutral-to-pullback zone (35-50 for Long) maximizes entry precision in strong trends.",
-                    "features": ["Close > EMA50 > EMA200", "Low <= EMA20 + 0.3*ATR", "RSI 35-50"],
-                    "parameters": {"stop_loss": "EMA50 - 1.0 * ATR", "take_profit": "Close + 3.0 * ATR", "max_holding": 72},
+                    "hypothesis": "Entering pullbacks near 4H EMA20 when RSI is in a neutral-to-pullback zone (40-55 for Long) maximizes entry precision in strong trends.",
+                    "features": ["1D Trend Bullish/Bearish", "Low <= EMA20 * 1.005", "RSI 40-55"],
+                    "parameters": {"stop_loss": "2.0 * ATR_14", "take_profit": "3.5 * ATR_14", "max_holding": 72},
                     "trials_evaluated": 4,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp1_Pullback_Trend_4H", {}).get("trade_summary", {}).get("expectancy_bps", -39.42),
+                        "phase_2_profit_factor": p2_strats.get("Exp1_Pullback_Trend_4H", {}).get("trade_summary", {}).get("profit_factor", 0.77),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Exp1_Pullback_Trend_4H", {}).get("trade_summary", {}).get("expectancy_bps", -57.33),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Premature stopouts on volatile ETH wicks. Profit factor 0.82, expectancy -48 bps."
+                    "reason_for_status": (
+                        f"Premature stopouts on volatile ETH wicks. Phase 2 profit factor "
+                        f"{p2_strats.get('Exp1_Pullback_Trend_4H', {}).get('trade_summary', {}).get('profit_factor', 0.77):.2f}, "
+                        f"expectancy {p2_strats.get('Exp1_Pullback_Trend_4H', {}).get('trade_summary', {}).get('expectancy_bps', -39.42):.2f} bps "
+                        f"(Phase 2.1 OOS: {p21_oos.get('Exp1_Pullback_Trend_4H', {}).get('trade_summary', {}).get('expectancy_bps', -57.33):.2f} bps)."
+                    )
                 },
                 {
                     "id": "EXP-23-SR-BREAKOUT",
                     "name": "Exp1_SR_Breakout_Retest_4H",
-                    "hypothesis": "Waiting for a retest of broken swing highs/lows before entering avoids false breakout traps.",
-                    "features": ["Prior Swing High/Low", "Retest within 0.5*ATR", "Close > Open confirmation"],
-                    "parameters": {"stop_loss": "Swing Level - 1.5 * ATR", "take_profit": "Close + 3.5 * ATR", "max_holding": 72},
+                    "hypothesis": "Waiting for a breakout of prior swing highs/lows with volume confirmation avoids false breakout traps.",
+                    "features": ["Prior Swing High/Low", "Volume ratio > 1.2x", "EMA20 > EMA50"],
+                    "parameters": {"stop_loss": "2.0 * ATR_14", "take_profit": "4.0 * ATR_14", "max_holding": 72},
                     "trials_evaluated": 4,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp1_SR_Breakout_Retest_4H", {}).get("trade_summary", {}).get("expectancy_bps", -38.80),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Exp1_SR_Breakout_Retest_4H", {}).get("trade_summary", {}).get("expectancy_bps", -59.65),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Infrequent retests caused missed moves; when retests occurred, many continued into full reversals (-62 bps expectancy)."
+                    "reason_for_status": (
+                        f"Breakouts frequently reversed in choppy conditions: Phase 2 expectancy "
+                        f"{p2_strats.get('Exp1_SR_Breakout_Retest_4H', {}).get('trade_summary', {}).get('expectancy_bps', -38.80):.2f} bps, "
+                        f"Phase 2.1 OOS expectancy {p21_oos.get('Exp1_SR_Breakout_Retest_4H', {}).get('trade_summary', {}).get('expectancy_bps', -59.65):.2f} bps."
+                    )
                 },
                 {
                     "id": "EXP-24-REGIME3-GATED",
                     "name": "Exp2_Gated_Trend_Regime3",
                     "hypothesis": "Strictly restricting Donchian breakouts to verified Regime 3 (ADX > 25, high directional movement) filters out choppy losses.",
-                    "features": ["Regime == 3", "Donchian 20 High/Low", "+DI > -DI"],
-                    "parameters": {"stop_loss": "2.5 * ATR", "take_profit": "3.5 * ATR", "max_holding": 72},
+                    "features": ["Regime == 3", "Donchian 20 High/Low", "1D Trend Alignment"],
+                    "parameters": {"stop_loss": "2.5 * ATR_14", "take_profit": "4.5 * ATR_14", "max_holding": 72},
                     "trials_evaluated": 4,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp2_Gated_Trend_Regime3", {}).get("trade_summary", {}).get("expectancy_bps", 9.83),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Exp2_Gated_Trend_Regime3", {}).get("trade_summary", {}).get("expectancy_bps", -18.70),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Lagging ADX indicator entered trends late near exhaustion points. Expectancy -18 bps."
+                    "reason_for_status": (
+                        f"Lagging ADX indicator entered trends late near exhaustion points. "
+                        f"Phase 2.1 OOS expectancy {p21_oos.get('Exp2_Gated_Trend_Regime3', {}).get('trade_summary', {}).get('expectancy_bps', -18.70):.2f} bps "
+                        f"(Phase 2 full-period: +{p2_strats.get('Exp2_Gated_Trend_Regime3', {}).get('trade_summary', {}).get('expectancy_bps', 9.83):.2f} bps)."
+                    )
                 },
                 {
                     "id": "EXP-25-COMPRESSION-EXP",
                     "name": "Exp2_Compression_Breakout_Regime1_to_2",
                     "hypothesis": "Detecting volatility compression (narrow Bollinger Bands) followed by expansion predicts high-velocity trend initiation.",
-                    "features": ["Prior Regime == 1 (Compression)", "Current Regime == 2 (Expansion)", "Volume ratio > 1.4x"],
-                    "parameters": {"stop_loss": "2.0 * ATR", "take_profit": "4.0 * ATR", "max_holding": 72},
+                    "features": ["Rolling 6-bar Regime 1 (Compression)", "Donchian 16 Breakout", "Volume ratio > 1.3x"],
+                    "parameters": {"stop_loss": "2.0 * ATR_14", "take_profit": "4.5 * ATR_14", "max_holding": 72},
                     "trials_evaluated": 4,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Exp2_Compression_Breakout_Regime1_to_2", {}).get("trade_summary", {}).get("expectancy_bps", -39.13),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Exp2_Compression_Breakout_Regime1_to_2", {}).get("trade_summary", {}).get("expectancy_bps", -40.76),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "High false breakout rate in ETH compression phases. Win rate 36.4%, expectancy -74 bps."
+                    "reason_for_status": (
+                        f"High false breakout rate in ETH compression phases. "
+                        f"Phase 2 expectancy {p2_strats.get('Exp2_Compression_Breakout_Regime1_to_2', {}).get('trade_summary', {}).get('expectancy_bps', -39.13):.2f} bps, "
+                        f"Phase 2.1 OOS expectancy {p21_oos.get('Exp2_Compression_Breakout_Regime1_to_2', {}).get('trade_summary', {}).get('expectancy_bps', -40.76):.2f} bps."
+                    )
                 },
                 {
                     "id": "EXP-26-COMBO-REGIME",
                     "name": "Phase4_Combo_Regime_Selector",
                     "hypothesis": "A master meta-selector combining Regime 3 trends and Regime 1 compression breakouts with 1D trend filtering achieves all-weather performance.",
-                    "features": ["Regime 3 + 1D EMA Trend", "Regime 1 Breakout", "Donchian 20"],
-                    "parameters": {"stop_loss": "2.5 * ATR", "take_profit": "4.0 * ATR", "max_holding": 72},
+                    "features": ["Regime 3 + 1D EMA Trend", "Regime 1 Breakout", "Momentum Continuation"],
+                    "parameters": {"stop_loss": "2.2 * ATR_14", "take_profit": "4.2 * ATR_14", "max_holding": 72, "exit_type": "trailing_atr"},
                     "trials_evaluated": 5,
+                    "metrics": {
+                        "phase_2_expectancy_bps": p2_strats.get("Phase4_Combo_Regime_Selector", {}).get("trade_summary", {}).get("expectancy_bps", 12.16),
+                        "phase_2_1_oos_expectancy_bps": p21_oos.get("Phase4_Combo_Regime_Selector", {}).get("trade_summary", {}).get("expectancy_bps", -12.63),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Did not outperform individual components; high drawdowns in choppy transition months. Expectancy -32 bps."
+                    "reason_for_status": (
+                        f"Did not outperform individual components; high drawdowns in choppy transition months. "
+                        f"Phase 2.1 OOS expectancy {p21_oos.get('Phase4_Combo_Regime_Selector', {}).get('trade_summary', {}).get('expectancy_bps', -12.63):.2f} bps "
+                        f"(MaxDD {p21_oos.get('Phase4_Combo_Regime_Selector', {}).get('intratrade_max_drawdown_pct', 28.08):.2f}%)."
+                    )
                 }
             ]
         },
         {
             "phase_id": "Phase 2.1",
             "title": "Backtest Integrity Repair & Purged Walk-Forward Evaluation",
-            "period": "2023-02-10 to 2026-11-04 (6 Chronological Folds)",
-            "data_scope": "6 Chronological Folds with 168-hour purge windows and mandatory boundary position liquidation",
+            "period": "2023-02-10 to 2026-11-04 (5 Chronological Folds: Folds 1-4 Walk-Forward OOS + Fold 5 Holdout)",
+            "data_scope": "5 Chronological Folds with 168-hour purge windows and mandatory boundary position liquidation",
             "experiments": [
                 {
                     "id": "EXP-30-WF-CANDIDATE-A",
                     "name": "Walk-Forward Candidate A (Exp1_Momentum_Continuation_4H)",
-                    "hypothesis": "Candidate A retains positive out-of-sample expectancy when evaluated independently across 6 chronological test folds with zero lookahead and 168h purge.",
+                    "hypothesis": "Candidate A retains positive out-of-sample expectancy when evaluated independently across 4 chronological walk-forward folds and 1 untouched holdout fold with zero lookahead and 168h purge.",
                     "features": ["4H Close > EMA50", "3-bar pullback", "Engulfing candle", "Volume ratio > 1.3x"],
-                    "parameters": {"stop_loss": "1.5 * ATR", "take_profit": "3.0 * ATR", "max_holding": 72, "risk_pct": 0.025, "leverage_cap": 3.0},
+                    "parameters": {"stop_loss": "1.5 * ATR_14", "take_profit": "3.0 * ATR_14", "max_holding": 72, "exit_type": "fixed_atr", "risk_pct": 0.025, "leverage_cap": 3.0},
                     "trials_evaluated": 1,
+                    "metrics": {
+                        "oos_expectancy_bps": cand_a_ts.get("expectancy_bps", 135.35),
+                        "oos_ci_95_expectancy_bps": cand_a_ts.get("ci_95_expectancy_bps", [29.88, 324.75]),
+                        "oos_win_rate_pct": cand_a_ts.get("win_rate_pct", 53.57),
+                        "oos_profit_factor": cand_a_ts.get("profit_factor", 1.92),
+                        "oos_max_drawdown_pct": cand_a_oos.get("intratrade_max_drawdown_pct", 4.74),
+                        "holdout_expectancy_bps": cand_a_ho.get("expectancy_bps", 103.85),
+                    },
                     "status": "RETAINED",
-                    "reason_for_status": "CONFIRMED EDGE: Produced +135.3 bps pooled OOS expectancy (95% CI: [+29.9, +324.7] bps), 57.1% win rate, and +103.9 bps on final Holdout Fold 5. Sole strategy to maintain positive expectancy across all evaluation folds."
+                    "reason_for_status": (
+                        f"CONFIRMED EDGE: Produced +{cand_a_ts.get('expectancy_bps', 135.35):.1f} bps pooled OOS expectancy "
+                        f"(95% CI: [{cand_a_ts.get('ci_95_expectancy_bps', [29.88, 324.75])[0]:+.1f}, {cand_a_ts.get('ci_95_expectancy_bps', [29.88, 324.75])[1]:+.1f}] bps), "
+                        f"{cand_a_ts.get('win_rate_pct', 53.57):.1f}% OOS win rate (56.8% across all 5 folds), "
+                        f"and +{cand_a_ho.get('expectancy_bps', 103.85):.1f} bps on final Holdout Fold 5."
+                    )
                 },
                 {
                     "id": "EXP-31-WF-DONCHIAN-120H",
                     "name": "Walk-Forward Trend_Donchian_120h",
-                    "hypothesis": "Restricting Donchian holding horizon to 120 hours mitigates adverse decay.",
-                    "features": ["4H Donchian 20", "1D EMA50 Trend"],
-                    "parameters": {"stop_loss": "2.0 * ATR", "take_profit": "None (Trailing)", "max_holding": 120},
+                    "hypothesis": "Extending Donchian 20 breakout holding horizon to 120 hours improves trend capture over 72h.",
+                    "features": ["4H Donchian 20", "1D EMA50/EMA200 Trend", "1D ADX > 20"],
+                    "parameters": {"stop_loss": "2.5 * ATR_14", "take_profit": "4.0 * ATR_14", "max_holding": 120, "exit_type": "fixed_atr"},
                     "trials_evaluated": 1,
+                    "metrics": {
+                        "oos_expectancy_bps": don_120_ts.get("expectancy_bps", 1.01),
+                        "oos_ci_95_expectancy_bps": don_120_ts.get("ci_95_expectancy_bps", [-158.13, 185.85]),
+                        "oos_win_rate_pct": don_120_ts.get("win_rate_pct", 42.31),
+                        "oos_profit_factor": don_120_ts.get("profit_factor", 1.01),
+                        "oos_max_drawdown_pct": don_120_oos.get("intratrade_max_drawdown_pct", 20.42),
+                        "fold_4_max_drawdown_pct": don_120_f4_dd,
+                        "holdout_expectancy_bps": don_120_ho.get("expectancy_bps", -24.92),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Negative pooled OOS expectancy (-34.6 bps) and severe fold drawdowns (-22.4% on Fold 4)."
+                    "reason_for_status": (
+                        f"Near-zero pooled OOS expectancy (+{don_120_ts.get('expectancy_bps', 1.01):.1f} bps, "
+                        f"95% CI: [{don_120_ts.get('ci_95_expectancy_bps', [-158.13, 185.85])[0]:+.1f}, {don_120_ts.get('ci_95_expectancy_bps', [-158.13, 185.85])[1]:+.1f}] bps), "
+                        f"excessive OOS max drawdown ({don_120_oos.get('intratrade_max_drawdown_pct', 20.42):.2f}%, Fold 4 DD {don_120_f4_dd:.2f}%), "
+                        f"and negative Holdout Fold 5 expectancy ({don_120_ho.get('expectancy_bps', -24.92):.1f} bps)."
+                    )
                 },
                 {
                     "id": "EXP-32-WF-DONCHIAN-168H",
                     "name": "Walk-Forward Trend_Donchian_168h",
                     "hypothesis": "Allowing up to 168 hours holding horizon captures extended tail trends.",
-                    "features": ["4H Donchian 20", "1D EMA50 Trend"],
-                    "parameters": {"stop_loss": "2.0 * ATR", "take_profit": "None (Trailing)", "max_holding": 168},
+                    "features": ["4H Donchian 20", "1D EMA50/EMA200 Trend", "1D ADX > 20"],
+                    "parameters": {"stop_loss": "2.5 * ATR_14", "take_profit": "4.0 * ATR_14", "max_holding": 168, "exit_type": "fixed_atr"},
                     "trials_evaluated": 1,
+                    "metrics": {
+                        "oos_expectancy_bps": don_168_ts.get("expectancy_bps", 74.40),
+                        "oos_ci_95_expectancy_bps": don_168_ts.get("ci_95_expectancy_bps", [-126.57, 296.39]),
+                        "oos_win_rate_pct": don_168_ts.get("win_rate_pct", 46.0),
+                        "oos_profit_factor": don_168_ts.get("profit_factor", 1.19),
+                        "oos_max_drawdown_pct": don_168_oos.get("intratrade_max_drawdown_pct", 23.94),
+                        "holdout_expectancy_bps": don_168_ho.get("expectancy_bps", -8.08),
+                    },
                     "status": "REJECTED",
-                    "reason_for_status": "Severe negative expectancy (-61.2 bps) and extreme drawdown (-34.8%)."
+                    "reason_for_status": (
+                        f"Positive pooled OOS expectancy (+{don_168_ts.get('expectancy_bps', 74.40):.1f} bps) "
+                        f"fails statistical significance (95% CI: [{don_168_ts.get('ci_95_expectancy_bps', [-126.57, 296.39])[0]:+.1f}, {don_168_ts.get('ci_95_expectancy_bps', [-126.57, 296.39])[1]:+.1f}] bps), "
+                        f"suffers severe OOS max drawdown ({don_168_oos.get('intratrade_max_drawdown_pct', 23.94):.2f}% > 15% limit), "
+                        f"and degrades to negative expectancy ({don_168_ho.get('expectancy_bps', -8.08):.1f} bps) on Holdout Fold 5."
+                    )
                 }
             ]
         },

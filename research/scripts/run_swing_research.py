@@ -437,7 +437,8 @@ def simulate_swing_trades(
     initial_capital: float = 10000.0,
     risk_pct: float = 0.025,
     max_leverage: float = 3.0,
-    max_concurrent_positions: int = 1
+    max_concurrent_positions: int = 1,
+    symbol: str = "ETHUSDT",
 ) -> Tuple[List[Dict[str, Any]], pd.Series]:
     """
     Simulates swing trades with full intra-bar hourly monitoring, actual stop-distance sizing,
@@ -601,6 +602,7 @@ def simulate_swing_trades(
 
                 completed_trades.append({
                     "trade_id": trade_id,
+                    "symbol": symbol,
                     "strategy": pos.get("strategy", ""),
                     "decision_time": str(pos["dec_time"]),
                     "entry_time": str(pos["entry_time"]),
@@ -709,14 +711,21 @@ def simulate_swing_trades(
 # 5. RESEARCH ORCHESTRATION & DELIVERABLES GENERATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_swing_research_pipeline():
+def run_swing_research_pipeline(
+    symbol: str = "ETHUSDT",
+    data_path: Optional[str] = None,
+    funding_path: Optional[str] = None,
+):
     print("=" * 80)
-    print("STARTING QUANT RESEARCH PHASE 2: SWING TRADING & REGIME-AWARE STRATEGIES")
+    print(f"STARTING QUANT RESEARCH PHASE 2: SWING TRADING & REGIME-AWARE STRATEGIES ({symbol})")
     print("=" * 80)
 
     # 1. Dataset Verification
-    data_path = os.path.join(BASE_DIR, "data", "cache", "eth_usdt_1h_3yr.parquet")
-    funding_path = os.path.join(BASE_DIR, "data", "cache", "eth_funding_3yr.parquet")
+    base_asset = symbol.lower().replace("usdt", "").replace("/", "").replace(":", "").strip("_") or "eth"
+    if data_path is None:
+        data_path = os.path.join(BASE_DIR, "data", "cache", f"{base_asset}_usdt_1h_3yr.parquet")
+    if funding_path is None:
+        funding_path = os.path.join(BASE_DIR, "data", "cache", f"{base_asset}_funding_3yr.parquet")
 
     if not os.path.exists(data_path) or not os.path.exists(funding_path):
         raise FileNotFoundError(f"Missing required parquet cache at {data_path} or {funding_path}")

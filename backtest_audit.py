@@ -29,6 +29,7 @@ from config import (
 from data.fetcher import fetch_ohlcv
 from data.preprocessor import build_features, transform
 from model.architecture import HybridModel
+from utils.quant_evaluation import calculate_actual_stop_position_sizing
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(message)s')
 logger = logging.getLogger("backtest_audit")
@@ -47,7 +48,7 @@ def simulate_trades(df_feat, candle_arr, market_arr, model, device,
                     initial_balance, start_idx, end_idx,
                     threshold=REG_THRESHOLD, reverse_signals=False,
                     shuffle_predictions=False, random_signals=False,
-                    label=""):
+                    label="", symbol: str = SYMBOL):
     """
     Core trade simulation engine. Runs bar-by-bar walk-forward.
     Returns dict of results + list of individual trade records.
@@ -59,7 +60,7 @@ def simulate_trades(df_feat, candle_arr, market_arr, model, device,
     trade_pnls = []
     trade_records = []
     daily_start = balance
-    trade_exit_bar = 0
+    trade_exit_bar = -1
     equity_curve = [balance]
 
     # Pre-compute all predictions if shuffling
@@ -118,73 +119,99 @@ def simulate_trades(df_feat, candle_arr, market_arr, model, device,
             continue
 
         side = "LONG" if pred > 0 else "SHORT"
-        entry_price = df_feat["close"].iloc[i - 1]
-        atr = df_feat["atr_14"].iloc[i - 1]
+        side_sign = 1 if side == "LONG" else -1
+        # Signal at close of bar i-1 executes at NEXT bar i open with adverse slippage
+        raw_entry_price = float(df_feat["open"].iloc[i])
+        entry_price = raw_entry_price * (1.0 + SLIPPAGE_RATE) if side == "LONG" else raw_entry_price * (1.0 - SLIPPAGE_RATE)
+        atr = float(df_feat["atr_14"].iloc[i - 1])
         if atr <= 0 or np.isnan(atr):
             equity_curve.append(balance)
             continue
 
         sl_dist = atr * SL_MULT
         tp_dist = atr * PT_MULT
-        risk_usd = balance * RISK_PCT
-        position_size = risk_usd / sl_dist
 
         if side == "LONG":
-            sl_price = entry_price - sl_dist
-            tp_price = entry_price + tp_dist
+            sl_price = raw_entry_price - sl_dist
+            tp_price = raw_entry_price + tp_dist
         else:
-            sl_price = entry_price + sl_dist
-            tp_price = entry_price - tp_dist
+            sl_price = raw_entry_price + sl_dist
+            tp_price = raw_entry_price - tp_dist
+
+        sizing = calculate_actual_stop_position_sizing(
+            account_equity=balance,
+            entry_price=entry_price,
+            stop_price=sl_price,
+            risk_pct=RISK_PCT,
+            max_leverage=float(LEVERAGE),
+            available_cash=balance,
+        )
+        notional = sizing["notional"]
+        if notional <= 0.0:
+            equity_curve.append(balance)
+            continue
+        position_size = notional / entry_price
 
         bars_held = 0
-        outcome = 0.0
+        raw_exit_price = float(df_feat["close"].iloc[i])
         hit = False
         exit_bar = i
         exit_reason = "TIMEOUT"
+        funding_drag = 0.0
 
         for j in range(i, min(i + MAX_HOLD_BARS, len(df_feat))):
             bars_held += 1
-            high_j = df_feat["high"].iloc[j]
-            low_j = df_feat["low"].iloc[j]
+            open_j = float(df_feat["open"].iloc[j])
+            high_j = float(df_feat["high"].iloc[j])
+            low_j = float(df_feat["low"].iloc[j])
+            ts_j = df_feat.index[j]
+
+            if "funding_rate" in df_feat.columns and hasattr(ts_j, "hour") and ts_j.hour in (0, 8, 16) and ts_j.minute == 0:
+                f_rate = float(df_feat["funding_rate"].iloc[j])
+                if not np.isnan(f_rate):
+                    funding_drag += side_sign * f_rate
 
             if side == "LONG":
-                if low_j <= sl_price:
-                    outcome = position_size * (sl_price - entry_price)
-                    if outcome < 0: losses += 1
-                    else: wins += 1
+                if j > i and open_j <= sl_price:
+                    raw_exit_price = open_j
+                    hit = True; exit_bar = j; exit_reason = "SL_GAP"; break
+                elif low_j <= sl_price:
+                    raw_exit_price = sl_price
                     hit = True; exit_bar = j; exit_reason = "SL"; break
                 elif high_j >= tp_price:
-                    outcome = position_size * (tp_price - entry_price)
-                    wins += 1; hit = True; exit_bar = j; exit_reason = "TP"; break
+                    raw_exit_price = tp_price
+                    hit = True; exit_bar = j; exit_reason = "TP"; break
                 if high_j >= entry_price + (tp_dist / 2.0):
                     sl_price = max(sl_price, entry_price)
             else:
-                if high_j >= sl_price:
-                    outcome = position_size * (entry_price - sl_price)
-                    if outcome < 0: losses += 1
-                    else: wins += 1
+                if j > i and open_j >= sl_price:
+                    raw_exit_price = open_j
+                    hit = True; exit_bar = j; exit_reason = "SL_GAP"; break
+                elif high_j >= sl_price:
+                    raw_exit_price = sl_price
                     hit = True; exit_bar = j; exit_reason = "SL"; break
                 elif low_j <= tp_price:
-                    outcome = position_size * (entry_price - tp_price)
-                    wins += 1; hit = True; exit_bar = j; exit_reason = "TP"; break
+                    raw_exit_price = tp_price
+                    hit = True; exit_bar = j; exit_reason = "TP"; break
                 if low_j <= entry_price - (tp_dist / 2.0):
                     sl_price = min(sl_price, entry_price)
 
         if not hit:
             exit_bar = min(i + MAX_HOLD_BARS - 1, len(df_feat) - 1)
-            exit_price = df_feat["close"].iloc[exit_bar]
-            if side == "LONG":
-                outcome = position_size * (exit_price - entry_price)
-            else:
-                outcome = position_size * (entry_price - exit_price)
-            if outcome > 0: wins += 1
-            else: losses += 1
+            raw_exit_price = float(df_feat["close"].iloc[exit_bar])
+
+        actual_exit_price = raw_exit_price * (1.0 - SLIPPAGE_RATE) if side == "LONG" else raw_exit_price * (1.0 + SLIPPAGE_RATE)
+        outcome = position_size * (actual_exit_price - entry_price) if side == "LONG" else position_size * (entry_price - actual_exit_price)
 
         trade_exit_bar = exit_bar
 
-        notional = position_size * entry_price
-        total_fee = notional * (COMMISSION_RATE + SLIPPAGE_RATE) * 2
+        exit_notional = position_size * actual_exit_price
+        total_fee = (notional + exit_notional) * COMMISSION_RATE + notional * funding_drag
         net_pnl = outcome - total_fee
+        if net_pnl > 0:
+            wins += 1
+        else:
+            losses += 1
         balance += net_pnl
         trade_pnls.append(net_pnl)
 
@@ -196,6 +223,7 @@ def simulate_trades(df_feat, candle_arr, market_arr, model, device,
 
         trade_records.append({
             "bar": i,
+            "symbol": symbol,
             "timestamp": str(df_feat.index[i]),
             "side": side,
             "entry": entry_price,
@@ -253,13 +281,13 @@ def print_result(r):
     logger.info(f"    Peak Balance:   ${r['peak_balance']:.2f}")
 
 
-def run_audit():
+def run_audit(symbol: str = SYMBOL):
     INITIAL_BALANCE = 57.0
     # 6 months = ~4320 hourly candles. Fetch 5000 to have buffer for indicators.
     FETCH_CANDLES = 5000
 
     logger.info("=" * 60)
-    logger.info("  COMPREHENSIVE BACKTEST AUDIT — OVERFITTING DETECTION")
+    logger.info("  COMPREHENSIVE BACKTEST AUDIT — OVERFITTING DETECTION (%s)", symbol)
     logger.info("=" * 60)
     logger.info(f"  Starting Balance:  ${INITIAL_BALANCE:.2f}")
     logger.info(f"  Fetching {FETCH_CANDLES} x 1H candles (~6+ months)")
@@ -268,7 +296,7 @@ def run_audit():
     logger.info("")
 
     # 1. Fetch & preprocess
-    df = fetch_ohlcv(SYMBOL, TIMEFRAME, limit=FETCH_CANDLES)
+    df = fetch_ohlcv(symbol, TIMEFRAME, limit=FETCH_CANDLES)
     if df.empty:
         logger.error("No data fetched."); return
     logger.info(f"  Data range: {df.index[0]} → {df.index[-1]}")
