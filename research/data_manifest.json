@@ -1,0 +1,1289 @@
+{
+  "generated_utc": "2026-11-06 10:40:46.985475+00:00",
+  "source": "Binance USDT-M futures public REST (/fapi/v1/klines, /fapi/v1/fundingRate); no credentials",
+  "symbol_selection": "Fixed pre-declared list; not selected on performance.",
+  "symbols": {
+    "BTCUSDT": {
+      "symbol": "BTCUSDT",
+      "listing_start_first_bar": "2019-09-08 17:00:00+00:00",
+      "start": "2019-09-08 17:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 62777,
+      "expected_bars_if_contiguous": 62777,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/btcusdt_1h_full.parquet",
+      "ohlcv_sha256": "0551077dd165adc85072ff5a1a82adfad2e8cbd424ff70dad39c3ddbcf7adfbe",
+      "funding_file": "data/cache/btcusdt_funding_full.parquet",
+      "funding_row_count": 7843,
+      "funding_start": "2019-09-10 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "da6e84329b3cb3ba0e80aa828e92e3f0ec0d79dfbbd641920c4fc594d25c7559"
+    },
+    "ETHUSDT": {
+      "symbol": "ETHUSDT",
+      "listing_start_first_bar": "2019-11-27 07:00:00+00:00",
+      "start": "2019-11-27 07:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 60867,
+      "expected_bars_if_contiguous": 60867,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/ethusdt_1h_full.parquet",
+      "ohlcv_sha256": "e56d05a2e507aaaef562acd7064ca17c5112226e8605c872086c8529df2cb475",
+      "funding_file": "data/cache/ethusdt_funding_full.parquet",
+      "funding_row_count": 7609,
+      "funding_start": "2019-11-27 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "bb9ace6487500705a8e69470d8cd0a2e3ab15747cc1a83bfbd4def865b2a04a2"
+    },
+    "BNBUSDT": {
+      "symbol": "BNBUSDT",
+      "listing_start_first_bar": "2020-02-10 08:00:00+00:00",
+      "start": "2020-02-10 08:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 59066,
+      "expected_bars_if_contiguous": 59066,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/bnbusdt_1h_full.parquet",
+      "ohlcv_sha256": "6e39dd1bd118b5100e976ae60a7b52a9cfbe3ad873d53c21152eb983f1d787ec",
+      "funding_file": "data/cache/bnbusdt_funding_full.parquet",
+      "funding_row_count": 7384,
+      "funding_start": "2020-02-10 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "720b116f0c41d25de598996f0da39b859289058ed233a36763e537141614fd72"
+    },
+    "SOLUSDT": {
+      "symbol": "SOLUSDT",
+      "listing_start_first_bar": "2020-09-14 07:00:00+00:00",
+      "start": "2020-09-14 07:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 53859,
+      "expected_bars_if_contiguous": 53859,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/solusdt_1h_full.parquet",
+      "ohlcv_sha256": "40d522d995e23b07c8d7114856521ac711bb13f349e29f001cb736ecb5a153ad",
+      "funding_file": "data/cache/solusdt_funding_full.parquet",
+      "funding_row_count": 6810,
+      "funding_start": "2020-09-13 16:00:00.004000+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "f6cbbee74c9d799890b3122a1396f5d279106bfe96a3eb4c5187940ec43fa31a"
+    },
+    "XRPUSDT": {
+      "symbol": "XRPUSDT",
+      "listing_start_first_bar": "2020-01-06 08:00:00+00:00",
+      "start": "2020-01-06 08:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 59906,
+      "expected_bars_if_contiguous": 59906,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/xrpusdt_1h_full.parquet",
+      "ohlcv_sha256": "67334317aa1b7c5e1ce41c7fca655f576e1fa5a9375ee3c8aafe345ad766c5ec",
+      "funding_file": "data/cache/xrpusdt_funding_full.parquet",
+      "funding_row_count": 7489,
+      "funding_start": "2020-01-06 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "35b9cb8503c1276e6fb9f00305d36a0097f4f7812e0de7fd43500214e7120a98"
+    },
+    "ADAUSDT": {
+      "symbol": "ADAUSDT",
+      "listing_start_first_bar": "2020-01-31 08:00:00+00:00",
+      "start": "2020-01-31 08:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 59306,
+      "expected_bars_if_contiguous": 59306,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/adausdt_1h_full.parquet",
+      "ohlcv_sha256": "da8e0d31a7c320995a15f115051548be6ca54e8817c297f8bed45d6bac8987b6",
+      "funding_file": "data/cache/adausdt_funding_full.parquet",
+      "funding_row_count": 7449,
+      "funding_start": "2020-01-19 16:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "056313087c063811ae1dc86424e0a7e1f067872b81c22e1df27de297b6785da5"
+    },
+    "DOGEUSDT": {
+      "symbol": "DOGEUSDT",
+      "listing_start_first_bar": "2020-07-10 09:00:00+00:00",
+      "start": "2020-07-10 09:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 55441,
+      "expected_bars_if_contiguous": 55441,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/dogeusdt_1h_full.parquet",
+      "ohlcv_sha256": "76dde9cf0a3dcfbdb3d4ef40cd728c42980e396552ad0fb675cf1a52c649152a",
+      "funding_file": "data/cache/dogeusdt_funding_full.parquet",
+      "funding_row_count": 6931,
+      "funding_start": "2020-07-10 08:00:00.001000+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "8d7c5f3de075e98ea78202c1a3a01f37631d25d04ab267dbb54e723df800371b"
+    },
+    "LINKUSDT": {
+      "symbol": "LINKUSDT",
+      "listing_start_first_bar": "2020-01-17 08:00:00+00:00",
+      "start": "2020-01-17 08:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 59642,
+      "expected_bars_if_contiguous": 59642,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/linkusdt_1h_full.parquet",
+      "ohlcv_sha256": "5f19da20cdeeae20c274741cef69333dcfde4f9f0acaa88b7bc2bcc592464025",
+      "funding_file": "data/cache/linkusdt_funding_full.parquet",
+      "funding_row_count": 7456,
+      "funding_start": "2020-01-17 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "3352fc59eb615be0b592f9c666313b49354b9194c86d65293c7fe9ef5f3685cd"
+    },
+    "LTCUSDT": {
+      "symbol": "LTCUSDT",
+      "listing_start_first_bar": "2020-01-09 08:00:00+00:00",
+      "start": "2020-01-09 08:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 59834,
+      "expected_bars_if_contiguous": 59834,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/ltcusdt_1h_full.parquet",
+      "ohlcv_sha256": "146f937c7785dfe9bf1d28e973c13dd2f2457226b72ea6d92ed9c14a850a4031",
+      "funding_file": "data/cache/ltcusdt_funding_full.parquet",
+      "funding_row_count": 7480,
+      "funding_start": "2020-01-09 08:00:00+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "c2ee45d3bbfda2a2f0647307833783609d8ac82d05d7dee4b95ce81c4673c394"
+    },
+    "AVAXUSDT": {
+      "symbol": "AVAXUSDT",
+      "listing_start_first_bar": "2020-09-23 07:00:00+00:00",
+      "start": "2020-09-23 07:00:00+00:00",
+      "end": "2026-11-06 09:00:00+00:00",
+      "bar_count": 53643,
+      "expected_bars_if_contiguous": 53643,
+      "gap_count": 0,
+      "gaps": [],
+      "validate_ohlcv_timestamps_full_series": "PASS",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "ohlcv_file": "data/cache/avaxusdt_1h_full.parquet",
+      "ohlcv_sha256": "826b1ca5eaf873a5b696e572a52afe418c784f2314057da81919d035c97e0f2e",
+      "funding_file": "data/cache/avaxusdt_funding_full.parquet",
+      "funding_row_count": 6708,
+      "funding_start": "2020-09-22 16:00:00.004000+00:00",
+      "funding_end": "2026-11-06 08:00:00+00:00",
+      "funding_sha256": "c5a23670fcc78f53c150a1727edb724920051878e9ef7ec8fc6d22aaa4053ebb"
+    }
+  },
+  "total_parquet_bytes": 22693684,
+  "spot_source": "Binance Spot public REST (/api/v3/klines); no credentials",
+  "spot_generated_utc": "2026-11-06 11:31:18.948690+00:00",
+  "spot_symbols": {
+    "BTCUSDT": {
+      "symbol": "BTCUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/btcusdt_spot_1h_full.parquet",
+      "spot_sha256": "a41d442c8aa8e3d92fff2b80c8b343d0f67f089cc9c944625f7ec4fd09c9be41"
+    },
+    "ETHUSDT": {
+      "symbol": "ETHUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/ethusdt_spot_1h_full.parquet",
+      "spot_sha256": "606977f1d9208b1a45536984538a6b28d114a010f7c3e24a13db011d56857b2c"
+    },
+    "BNBUSDT": {
+      "symbol": "BNBUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/bnbusdt_spot_1h_full.parquet",
+      "spot_sha256": "fad8ec78cc1d6bdb57c92db33b42543b14a47d3a4d1826d77d8aae99af68b65a"
+    },
+    "SOLUSDT": {
+      "symbol": "SOLUSDT",
+      "market_type": "SPOT",
+      "start": "2020-08-11 06:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 54657,
+      "expected_bars_if_contiguous": 54677,
+      "gap_count": 10,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2020-11-30 05:00:00+00:00 and 2020-11-30 07:00:00+00:00 (expected 0 days 01:00:00, got 0 days 02:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/solusdt_spot_1h_full.parquet",
+      "spot_sha256": "661763b68ea1b3d7bc4963a1a94697bd8ecab6ea00db0256dee0156f218f9de1"
+    },
+    "XRPUSDT": {
+      "symbol": "XRPUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/xrpusdt_spot_1h_full.parquet",
+      "spot_sha256": "67d8e2daf955645fad30d57055ab5cb2e8972bc2a9a9f7c66ed7f6fefa540fad"
+    },
+    "ADAUSDT": {
+      "symbol": "ADAUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/adausdt_spot_1h_full.parquet",
+      "spot_sha256": "cc409107eb096806f6de1e4f84e8e77dd1013edce07706e4d2af86d991615ef0"
+    },
+    "DOGEUSDT": {
+      "symbol": "DOGEUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/dogeusdt_spot_1h_full.parquet",
+      "spot_sha256": "900f4e934ab48fb1d6e4caa391022a18ece5c53171933302be404faae327fa13"
+    },
+    "LINKUSDT": {
+      "symbol": "LINKUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/linkusdt_spot_1h_full.parquet",
+      "spot_sha256": "741956e59c88545060ff1e8cb8f903568e37505765438a6ba96fc0cc03db4eea"
+    },
+    "LTCUSDT": {
+      "symbol": "LTCUSDT",
+      "market_type": "SPOT",
+      "start": "2019-09-01 00:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 62927,
+      "expected_bars_if_contiguous": 62963,
+      "gap_count": 17,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2019-11-13 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-13 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2019-11-25 01:00:00+00:00",
+          "first_bar_after_gap": "2019-11-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-09 01:00:00+00:00",
+          "first_bar_after_gap": "2020-02-09 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-02-19 11:00:00+00:00",
+          "first_bar_after_gap": "2020-02-19 17:00:00+00:00",
+          "missing_bars": 5,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-03-04 09:00:00+00:00",
+          "first_bar_after_gap": "2020-03-04 11:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-04-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-04-25 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-06-28 01:00:00+00:00",
+          "first_bar_after_gap": "2020-06-28 05:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2019-11-13 01:00:00+00:00 and 2019-11-13 04:00:00+00:00 (expected 0 days 01:00:00, got 0 days 03:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/ltcusdt_spot_1h_full.parquet",
+      "spot_sha256": "8eac18d5ce8197b279999678707545c127978a47d247302aa86035c2c7f7d468"
+    },
+    "AVAXUSDT": {
+      "symbol": "AVAXUSDT",
+      "market_type": "SPOT",
+      "start": "2020-09-22 06:00:00+00:00",
+      "end": "2026-11-06 10:00:00+00:00",
+      "bar_count": 53649,
+      "expected_bars_if_contiguous": 53669,
+      "gap_count": 10,
+      "gaps": [
+        {
+          "last_bar_before_gap": "2020-11-30 05:00:00+00:00",
+          "first_bar_after_gap": "2020-11-30 07:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-21 13:00:00+00:00",
+          "first_bar_after_gap": "2020-12-21 18:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2020-12-25 01:00:00+00:00",
+          "first_bar_after_gap": "2020-12-25 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-02-11 03:00:00+00:00",
+          "first_bar_after_gap": "2021-02-11 05:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-03-06 01:00:00+00:00",
+          "first_bar_after_gap": "2021-03-06 03:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-20 01:00:00+00:00",
+          "first_bar_after_gap": "2021-04-20 04:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-04-25 04:00:00+00:00",
+          "first_bar_after_gap": "2021-04-25 08:00:00+00:00",
+          "missing_bars": 3,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-08-13 01:00:00+00:00",
+          "first_bar_after_gap": "2021-08-13 06:00:00+00:00",
+          "missing_bars": 4,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2021-09-29 06:00:00+00:00",
+          "first_bar_after_gap": "2021-09-29 09:00:00+00:00",
+          "missing_bars": 2,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        },
+        {
+          "last_bar_before_gap": "2023-03-24 12:00:00+00:00",
+          "first_bar_after_gap": "2023-03-24 14:00:00+00:00",
+          "missing_bars": 1,
+          "handling": "NOT filled; bars absent from file. Consumers must treat as a break."
+        }
+      ],
+      "validate_ohlcv_timestamps_full_series": "FAIL (expected when gaps exist): OHLCV timestamp gap detected between 2020-11-30 05:00:00+00:00 and 2020-11-30 07:00:00+00:00 (expected 0 days 01:00:00, got 0 days 02:00:00).",
+      "validate_ohlcv_timestamps_all_contiguous_segments": "PASS",
+      "spot_file": "data/cache/avaxusdt_spot_1h_full.parquet",
+      "spot_sha256": "ab960e794f7990ae0fb886ebedde408f8119842b3c1bdf348cae32336406118f"
+    }
+  },
+  "total_spot_parquet_bytes": 22009416
+}
