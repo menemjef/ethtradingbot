@@ -52,6 +52,7 @@ audit_bridge/reports/
 scratch/
 data/live_market/
 data/paper_trading/
+data/backups/
 *.db
 *.db-wal
 *.db-shm
