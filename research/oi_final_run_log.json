@@ -1,5 +1,5 @@
 {
-  "started_utc": "2026-11-06T16:13:14.110757+00:00",
+  "started_utc": "2026-11-07T04:42:45.445267+00:00",
   "final_start": "2025-01-01 00:00:00+00:00",
   "unlocked_by": "run_all_stages()",
   "file_hashes": {
@@ -34,5 +34,5 @@
     "AVAXUSDT_klines": "6b0e60642b8d2a166d42f7e50fbe99453b7f094531ec726a552367521a87f102",
     "AVAXUSDT_funding": "39ff4ba99bb819ac52cb9524cf2d3281b401aa0447d17f61756f77dde201de70"
   },
-  "finished_utc": "2026-11-06T16:14:08.013692+00:00"
+  "finished_utc": "2026-11-07T04:43:44.881918+00:00"
 }

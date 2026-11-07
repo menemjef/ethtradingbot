@@ -232,6 +232,13 @@ def construct_features_and_targets(raw_data: Dict[str, Dict[str, pd.DataFrame]],
         f_rate_s = df_f["last_funding_rate"].reindex(hourly_idx, method="ffill", limit=8)
         mean_funding_7d = f_rate_s.rolling(window=7 * 24, min_periods=48).mean()
         
+        # Forward settled funding rates over horizon window [t+1h, t+H]
+        f_settle_s = pd.Series(0.0, index=hourly_idx)
+        common_f = df_f.index.intersection(hourly_idx)
+        f_settle_s.loc[common_f] = df_f.loc[common_f, "last_funding_rate"].values
+        fwd_funding_24h = f_settle_s.iloc[::-1].rolling(24).sum().iloc[::-1].shift(-1).reindex(hourly_idx)
+        fwd_funding_72h = f_settle_s.iloc[::-1].rolling(72).sum().iloc[::-1].shift(-1).reindex(hourly_idx)
+        
         # Align metrics to 1h bars: for bar close t, latest metrics row <= t - 5m
         # Metrics 5m rows have timestamp <= t - 5m
         # Create a shifted index to look up <= t - 5m
@@ -295,6 +302,8 @@ def construct_features_and_targets(raw_data: Dict[str, Dict[str, pd.DataFrame]],
             "target_72h": target_72h.values,
             "fwd_ret_24h_raw": fwd_ret_24h.values,
             "fwd_ret_72h_raw": fwd_ret_72h.values,
+            "fwd_funding_24h": fwd_funding_24h.values,
+            "fwd_funding_72h": fwd_funding_72h.values,
             "vol_30d": vol_30d.values,
             "eligible": (hourly_idx >= sym_eligible_dt)
         })
@@ -344,12 +353,13 @@ def compute_test_statistics(panel: pd.DataFrame, feat_name: str, horizon: int,
     gross_spreads = []
     net_spreads = []
     fee_per_side = 0.0010  # 10 bps
-    # Round-trip friction on dual legs: 40 bps
-    friction = 4.0 * fee_per_side
+    fund_col = f"fwd_funding_{horizon}h"
     
     # Group by decision time
     time_groups = valid.groupby("timestamp")
     timestamps = []
+    prev_top_w = None
+    prev_bot_w = None
     
     for dt, grp in time_groups:
         if len(grp) >= 4:  # At least 4 coins for ranking
@@ -368,12 +378,34 @@ def compute_test_statistics(panel: pd.DataFrame, feat_name: str, horizon: int,
                 
                 r_top = top_q[raw_ret_col].mean()
                 r_bot = bottom_q[raw_ret_col].mean()
-                
                 spread_g = r_top - r_bot
-                # Net spread accounts for fee friction and funding
-                spread_n = spread_g - friction
+                
+                # Actual forward settled funding drag: long pays f_top, short receives f_bot
+                f_top = top_q[fund_col].mean() if fund_col in top_q else 0.0
+                f_bot = bottom_q[fund_col].mean() if fund_col in bottom_q else 0.0
+                funding_drag = f_top - f_bot
+                
+                # Actual turnover calculation
+                top_w = {s: 1.0 / n_quint for s in top_q["symbol"]}
+                bot_w = {s: 1.0 / n_quint for s in bottom_q["symbol"]}
+                
+                if prev_top_w is None:
+                    turnover_top = 1.0
+                    turnover_bot = 1.0
+                else:
+                    all_top = set(top_w.keys()) | set(prev_top_w.keys())
+                    all_bot = set(bot_w.keys()) | set(prev_bot_w.keys())
+                    turnover_top = sum(abs(top_w.get(s, 0.0) - prev_top_w.get(s, 0.0)) for s in all_top)
+                    turnover_bot = sum(abs(bot_w.get(s, 0.0) - prev_bot_w.get(s, 0.0)) for s in all_bot)
+                    
+                turnover_cost = (turnover_top + turnover_bot) * fee_per_side
+                spread_n = spread_g - funding_drag - turnover_cost
+                
                 gross_spreads.append(spread_g)
                 net_spreads.append(spread_n)
+                
+                prev_top_w = top_w
+                prev_bot_w = bot_w
 
     cs_ic_arr = np.array(cs_ic_series)
     mean_cs_ic = float(np.mean(cs_ic_arr)) if len(cs_ic_arr) > 0 else 0.0

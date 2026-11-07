@@ -35,7 +35,7 @@
       "ci_upper": 0.0128,
       "p_value": 0.737,
       "spread_gross_pct": 7.61,
-      "spread_net_pct": -138.49,
+      "spread_net_pct": -33.82,
       "n_decision_points": 4360,
       "n_observations": 45362
     },
@@ -46,7 +46,7 @@
       "ci_upper": 0.019,
       "p_value": 0.827,
       "spread_gross_pct": 10.08,
-      "spread_net_pct": -38.62,
+      "spread_net_pct": -2.54,
       "n_decision_points": 4352,
       "n_observations": 45274
     },
@@ -57,7 +57,7 @@
       "ci_upper": 0.0126,
       "p_value": 0.574,
       "spread_gross_pct": -83.75,
-      "spread_net_pct": -229.85,
+      "spread_net_pct": -115.47,
       "n_decision_points": 4286,
       "n_observations": 44623
     },
@@ -68,7 +68,7 @@
       "ci_upper": 0.0183,
       "p_value": 0.558,
       "spread_gross_pct": -60.62,
-      "spread_net_pct": -109.32,
+      "spread_net_pct": -72.37,
       "n_decision_points": 4278,
       "n_observations": 44535
     },
@@ -79,7 +79,7 @@
       "ci_upper": 0.0163,
       "p_value": 0.525,
       "spread_gross_pct": -43.89,
-      "spread_net_pct": -189.99,
+      "spread_net_pct": -76.95,
       "n_decision_points": 2861,
       "n_observations": 30409
     },
@@ -90,7 +90,7 @@
       "ci_upper": 0.0164,
       "p_value": 0.322,
       "spread_gross_pct": -41.05,
-      "spread_net_pct": -89.75,
+      "spread_net_pct": -54.03,
       "n_decision_points": 2853,
       "n_observations": 30321
     },
@@ -101,7 +101,7 @@
       "ci_upper": 0.0079,
       "p_value": 0.588,
       "spread_gross_pct": 18.54,
-      "spread_net_pct": -127.56,
+      "spread_net_pct": -96.24,
       "n_decision_points": 3729,
       "n_observations": 39057
     },
@@ -112,7 +112,7 @@
       "ci_upper": 0.0167,
       "p_value": 0.376,
       "spread_gross_pct": 14.38,
-      "spread_net_pct": -34.32,
+      "spread_net_pct": -23.8,
       "n_decision_points": 3721,
       "n_observations": 38969
     },
@@ -123,7 +123,7 @@
       "ci_upper": -0.0077,
       "p_value": 0.001,
       "spread_gross_pct": -95.71,
-      "spread_net_pct": -241.81,
+      "spread_net_pct": -110.22,
       "n_decision_points": 6184,
       "n_observations": 59939
     },
@@ -134,7 +134,7 @@
       "ci_upper": -0.0033,
       "p_value": 0.027,
       "spread_gross_pct": -25.57,
-      "spread_net_pct": -74.27,
+      "spread_net_pct": -33.31,
       "n_decision_points": 6176,
       "n_observations": 59811
     },
@@ -145,7 +145,7 @@
       "ci_upper": 0.0145,
       "p_value": 0.749,
       "spread_gross_pct": 31.88,
-      "spread_net_pct": -114.22,
+      "spread_net_pct": -38.41,
       "n_decision_points": 4352,
       "n_observations": 45258
     },
@@ -156,7 +156,7 @@
       "ci_upper": 0.0078,
       "p_value": 0.343,
       "spread_gross_pct": 31.2,
-      "spread_net_pct": -17.5,
+      "spread_net_pct": 6.55,
       "n_decision_points": 4344,
       "n_observations": 45170
     }
@@ -169,7 +169,7 @@
       "ci_upper": 0.0202,
       "p_value": 0.937,
       "spread_gross_pct": 24.01,
-      "spread_net_pct": -122.09,
+      "spread_net_pct": -16.86,
       "n_decision_points": 2672,
       "n_observations": 26720,
       "p_adjusted": 0.937
@@ -181,7 +181,7 @@
       "ci_upper": 0.0343,
       "p_value": 0.751,
       "spread_gross_pct": 18.55,
-      "spread_net_pct": -30.15,
+      "spread_net_pct": 4.83,
       "n_decision_points": 2660,
       "n_observations": 26600,
       "p_adjusted": 0.937
@@ -193,7 +193,7 @@
       "ci_upper": 0.0294,
       "p_value": 0.605,
       "spread_gross_pct": -20.64,
-      "spread_net_pct": -166.74,
+      "spread_net_pct": -50.53,
       "n_decision_points": 2672,
       "n_observations": 26720,
       "p_adjusted": 0.937
@@ -205,7 +205,7 @@
       "ci_upper": 0.0334,
       "p_value": 0.882,
       "spread_gross_pct": -25.49,
-      "spread_net_pct": -74.19,
+      "spread_net_pct": -35.61,
       "n_decision_points": 2660,
       "n_observations": 26600,
       "p_adjusted": 0.937
@@ -217,7 +217,7 @@
       "ci_upper": 0.0167,
       "p_value": 0.498,
       "spread_gross_pct": -33.58,
-      "spread_net_pct": -179.68,
+      "spread_net_pct": -64.75,
       "n_decision_points": 2672,
       "n_observations": 26720,
       "p_adjusted": 0.937
@@ -229,7 +229,7 @@
       "ci_upper": 0.0289,
       "p_value": 0.645,
       "spread_gross_pct": -27.14,
-      "spread_net_pct": -75.84,
+      "spread_net_pct": -37.93,
       "n_decision_points": 2660,
       "n_observations": 26600,
       "p_adjusted": 0.937
@@ -241,7 +241,7 @@
       "ci_upper": 0.016,
       "p_value": 0.861,
       "spread_gross_pct": 0.86,
-      "spread_net_pct": -145.24,
+      "spread_net_pct": -115.43,
       "n_decision_points": 2672,
       "n_observations": 26720,
       "p_adjusted": 0.937
@@ -253,7 +253,7 @@
       "ci_upper": 0.0114,
       "p_value": 0.753,
       "spread_gross_pct": -1.67,
-      "spread_net_pct": -50.37,
+      "spread_net_pct": -40.41,
       "n_decision_points": 2660,
       "n_observations": 26600,
       "p_adjusted": 0.937
@@ -265,7 +265,7 @@
       "ci_upper": 0.0006,
       "p_value": 0.06,
       "spread_gross_pct": 1.85,
-      "spread_net_pct": -144.25,
+      "spread_net_pct": -10.43,
       "n_decision_points": 2672,
       "n_observations": 26720,
       "p_adjusted": 0.258
@@ -277,7 +277,7 @@
       "ci_upper": 0.0048,
       "p_value": 0.086,
       "spread_gross_pct": -2.66,
-      "spread_net_pct": -51.36,
+      "spread_net_pct": -7.61,
       "n_decision_points": 2660,
       "n_observations": 26600,
       "p_adjusted": 0.258
@@ -289,7 +289,7 @@
       "ci_upper": -0.0001,
       "p_value": 0.046,
       "spread_gross_pct": -0.78,
-      "spread_net_pct": -146.88,
+      "spread_net_pct": -69.11,
       "n_decision_points": 2664,
       "n_observations": 26640,
       "p_adjusted": 0.258
@@ -301,7 +301,7 @@
       "ci_upper": 0.0015,
       "p_value": 0.072,
       "spread_gross_pct": -6.11,
-      "spread_net_pct": -54.81,
+      "spread_net_pct": -28.79,
       "n_decision_points": 2652,
       "n_observations": 26520,
       "p_adjusted": 0.258
@@ -326,7 +326,7 @@
       "ci_excludes_zero": false,
       "bh_pass": false,
       "spread_dev_pos": false,
-      "spread_fin_pos": false
+      "spread_fin_pos": true
     },
     "z_global_ls_ratio_24h": {
       "passed": false,
@@ -425,7 +425,7 @@
       "ic_mag_fin": false,
       "ci_excludes_zero": false,
       "bh_pass": false,
-      "spread_dev_pos": false,
+      "spread_dev_pos": true,
       "spread_fin_pos": false
     }
   },
