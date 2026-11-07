@@ -1,0 +1,31 @@
+{
+  "status": "finished",
+  "started_utc": "2026-11-06 11:13:05.554652+00:00",
+  "git_head_at_start": "9727de32ed56aa9ac92a60283da625c2216170de",
+  "dev_results_sha256": "991a8dc2a0a8dc297f225988dd653ceeff447a970453c96e73cfcb093779b9b2",
+  "data_sha256": {
+    "btcusdt_1h_full.parquet": "0551077dd165adc85072ff5a1a82adfad2e8cbd424ff70dad39c3ddbcf7adfbe",
+    "btcusdt_funding_full.parquet": "da6e84329b3cb3ba0e80aa828e92e3f0ec0d79dfbbd641920c4fc594d25c7559",
+    "ethusdt_1h_full.parquet": "e56d05a2e507aaaef562acd7064ca17c5112226e8605c872086c8529df2cb475",
+    "ethusdt_funding_full.parquet": "bb9ace6487500705a8e69470d8cd0a2e3ab15747cc1a83bfbd4def865b2a04a2",
+    "bnbusdt_1h_full.parquet": "6e39dd1bd118b5100e976ae60a7b52a9cfbe3ad873d53c21152eb983f1d787ec",
+    "bnbusdt_funding_full.parquet": "720b116f0c41d25de598996f0da39b859289058ed233a36763e537141614fd72",
+    "solusdt_1h_full.parquet": "40d522d995e23b07c8d7114856521ac711bb13f349e29f001cb736ecb5a153ad",
+    "solusdt_funding_full.parquet": "f6cbbee74c9d799890b3122a1396f5d279106bfe96a3eb4c5187940ec43fa31a",
+    "xrpusdt_1h_full.parquet": "67334317aa1b7c5e1ce41c7fca655f576e1fa5a9375ee3c8aafe345ad766c5ec",
+    "xrpusdt_funding_full.parquet": "35b9cb8503c1276e6fb9f00305d36a0097f4f7812e0de7fd43500214e7120a98",
+    "adausdt_1h_full.parquet": "da8e0d31a7c320995a15f115051548be6ca54e8817c297f8bed45d6bac8987b6",
+    "adausdt_funding_full.parquet": "056313087c063811ae1dc86424e0a7e1f067872b81c22e1df27de297b6785da5",
+    "dogeusdt_1h_full.parquet": "76dde9cf0a3dcfbdb3d4ef40cd728c42980e396552ad0fb675cf1a52c649152a",
+    "dogeusdt_funding_full.parquet": "8d7c5f3de075e98ea78202c1a3a01f37631d25d04ab267dbb54e723df800371b",
+    "linkusdt_1h_full.parquet": "5f19da20cdeeae20c274741cef69333dcfde4f9f0acaa88b7bc2bcc592464025",
+    "linkusdt_funding_full.parquet": "3352fc59eb615be0b592f9c666313b49354b9194c86d65293c7fe9ef5f3685cd",
+    "ltcusdt_1h_full.parquet": "146f937c7785dfe9bf1d28e973c13dd2f2457226b72ea6d92ed9c14a850a4031",
+    "ltcusdt_funding_full.parquet": "c2ee45d3bbfda2a2f0647307833783609d8ac82d05d7dee4b95ce81c4673c394",
+    "avaxusdt_1h_full.parquet": "826b1ca5eaf873a5b696e572a52afe418c784f2314057da81919d035c97e0f2e",
+    "avaxusdt_funding_full.parquet": "c5a23670fcc78f53c150a1727edb724920051878e9ef7ec8fc6d22aaa4053ebb"
+  },
+  "note": "SINGLE holdout run. Presence of this file blocks any re-run.",
+  "finished_utc": "2026-11-06 11:16:31.193217+00:00",
+  "holdout_results_sha256": "6f683448dffd5174a6bc61970fc4da69091d3401246a3276325e6deb85d37cab"
+}

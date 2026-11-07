@@ -1,0 +1,354 @@
+{
+  "stage1_results": {
+    "dev": {
+      "BTCUSDT_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.50127,
+        "aug_score": 0.48493,
+        "improvement": 0.01634,
+        "ci_lower": -0.01717,
+        "ci_upper": 0.04731,
+        "p_value": 0.437,
+        "ci_excludes_zero": false,
+        "n_observations": 717,
+        "n_unique_dates": 717,
+        "extra": {}
+      },
+      "BTCUSDT_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00034,
+        "aug_score": 0.00033,
+        "improvement": 0.02798,
+        "ci_lower": 0.00285,
+        "ci_upper": 0.05306,
+        "p_value": 0.028,
+        "ci_excludes_zero": true,
+        "n_observations": 716,
+        "n_unique_dates": 716,
+        "extra": {}
+      },
+      "BTCUSDT_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02676,
+        "aug_score": 0.02692,
+        "improvement": -0.00591,
+        "ci_lower": -0.02372,
+        "ci_upper": 0.00462,
+        "p_value": 0.16,
+        "ci_excludes_zero": false,
+        "n_observations": 717,
+        "n_unique_dates": 717,
+        "extra": {
+          "auc_base": 0.7103,
+          "auc_aug": 0.6477,
+          "delta_auc": -0.0626
+        }
+      },
+      "ETHUSDT_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.50596,
+        "aug_score": 0.53377,
+        "improvement": -0.02781,
+        "ci_lower": -0.0554,
+        "ci_upper": 0.00238,
+        "p_value": 0.078,
+        "ci_excludes_zero": false,
+        "n_observations": 640,
+        "n_unique_dates": 640,
+        "extra": {}
+      },
+      "ETHUSDT_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00051,
+        "aug_score": 0.00052,
+        "improvement": -0.01487,
+        "ci_lower": -0.04768,
+        "ci_upper": 0.01835,
+        "p_value": 0.455,
+        "ci_excludes_zero": false,
+        "n_observations": 640,
+        "n_unique_dates": 640,
+        "extra": {}
+      },
+      "ETHUSDT_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02347,
+        "aug_score": 0.02315,
+        "improvement": 0.01361,
+        "ci_lower": -0.03051,
+        "ci_upper": 0.06328,
+        "p_value": 0.515,
+        "ci_excludes_zero": false,
+        "n_observations": 640,
+        "n_unique_dates": 640,
+        "extra": {
+          "auc_base": 0.5814,
+          "auc_aug": 0.5339,
+          "delta_auc": -0.0476
+        }
+      },
+      "POOLED_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.49279,
+        "aug_score": 0.50142,
+        "improvement": -0.00863,
+        "ci_lower": -0.02906,
+        "ci_upper": 0.01446,
+        "p_value": 0.422,
+        "ci_excludes_zero": false,
+        "n_observations": 7170,
+        "n_unique_dates": 717,
+        "extra": {}
+      },
+      "POOLED_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00085,
+        "aug_score": 0.00085,
+        "improvement": 0.00371,
+        "ci_lower": -0.01779,
+        "ci_upper": 0.02664,
+        "p_value": 0.814,
+        "ci_excludes_zero": false,
+        "n_observations": 7160,
+        "n_unique_dates": 716,
+        "extra": {}
+      },
+      "POOLED_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02367,
+        "aug_score": 0.02355,
+        "improvement": 0.00509,
+        "ci_lower": -0.00308,
+        "ci_upper": 0.01077,
+        "p_value": 0.294,
+        "ci_excludes_zero": false,
+        "n_observations": 7170,
+        "n_unique_dates": 717,
+        "extra": {
+          "auc_base": 0.5948,
+          "auc_aug": 0.6295,
+          "delta_auc": 0.0347
+        }
+      }
+    },
+    "final": {
+      "BTCUSDT_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.35103,
+        "aug_score": 0.34406,
+        "improvement": 0.00697,
+        "ci_lower": -0.00785,
+        "ci_upper": 0.02002,
+        "p_value": 0.414,
+        "ci_excludes_zero": false,
+        "n_observations": 667,
+        "n_unique_dates": 667,
+        "extra": {},
+        "p_adjusted": 0.5323
+      },
+      "BTCUSDT_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00031,
+        "aug_score": 0.0003,
+        "improvement": 0.03281,
+        "ci_lower": 0.00462,
+        "ci_upper": 0.06628,
+        "p_value": 0.034,
+        "ci_excludes_zero": true,
+        "n_observations": 665,
+        "n_unique_dates": 665,
+        "extra": {},
+        "p_adjusted": 0.102
+      },
+      "BTCUSDT_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02614,
+        "aug_score": 0.02619,
+        "improvement": -0.00189,
+        "ci_lower": -0.01916,
+        "ci_upper": 0.01356,
+        "p_value": 0.937,
+        "ci_excludes_zero": false,
+        "n_observations": 667,
+        "n_unique_dates": 667,
+        "extra": {
+          "auc_base": 0.6525,
+          "auc_aug": 0.623,
+          "delta_auc": -0.0295
+        },
+        "p_adjusted": 0.937
+      },
+      "ETHUSDT_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.34959,
+        "aug_score": 0.35314,
+        "improvement": -0.00355,
+        "ci_lower": -0.00964,
+        "ci_upper": 0.00271,
+        "p_value": 0.284,
+        "ci_excludes_zero": false,
+        "n_observations": 667,
+        "n_unique_dates": 667,
+        "extra": {},
+        "p_adjusted": 0.426
+      },
+      "ETHUSDT_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00079,
+        "aug_score": 0.00078,
+        "improvement": 0.0166,
+        "ci_lower": -0.00129,
+        "ci_upper": 0.03872,
+        "p_value": 0.066,
+        "ci_excludes_zero": false,
+        "n_observations": 665,
+        "n_unique_dates": 665,
+        "extra": {},
+        "p_adjusted": 0.1485
+      },
+      "ETHUSDT_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02193,
+        "aug_score": 0.02211,
+        "improvement": -0.0082,
+        "ci_lower": -0.01828,
+        "ci_upper": 0.00279,
+        "p_value": 0.147,
+        "ci_excludes_zero": false,
+        "n_observations": 667,
+        "n_unique_dates": 667,
+        "extra": {
+          "auc_base": 0.5697,
+          "auc_aug": 0.5438,
+          "delta_auc": -0.026
+        },
+        "p_adjusted": 0.2646
+      },
+      "POOLED_realized_vol": {
+        "metric_name": "QLIKE Loss Improvement",
+        "base_score": 0.65648,
+        "aug_score": 0.68357,
+        "improvement": -0.02709,
+        "ci_lower": -0.04435,
+        "ci_upper": -0.00178,
+        "p_value": 0.008,
+        "ci_excludes_zero": false,
+        "n_observations": 6667,
+        "n_unique_dates": 667,
+        "extra": {},
+        "p_adjusted": 0.036
+      },
+      "POOLED_worst_drawdown": {
+        "metric_name": "OOS R-squared Improvement",
+        "base_score": 0.00109,
+        "aug_score": 0.0011,
+        "improvement": -0.0016,
+        "ci_lower": -0.00986,
+        "ci_upper": 0.00697,
+        "p_value": 0.616,
+        "ci_excludes_zero": false,
+        "n_observations": 6647,
+        "n_unique_dates": 665,
+        "extra": {},
+        "p_adjusted": 0.693
+      },
+      "POOLED_tail_event": {
+        "metric_name": "Brier Skill Score Improvement",
+        "base_score": 0.02022,
+        "aug_score": 0.02033,
+        "improvement": -0.00539,
+        "ci_lower": -0.00853,
+        "ci_upper": -0.00262,
+        "p_value": 0.001,
+        "ci_excludes_zero": false,
+        "n_observations": 6667,
+        "n_unique_dates": 667,
+        "extra": {
+          "auc_base": 0.6149,
+          "auc_aug": 0.5749,
+          "delta_auc": -0.04
+        },
+        "p_adjusted": 0.009
+      }
+    }
+  },
+  "verdicts": {
+    "BTCUSDT_realized_vol": {
+      "passed": false,
+      "dev_pos": true,
+      "fin_pos": true,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "BTCUSDT_worst_drawdown": {
+      "passed": false,
+      "dev_pos": true,
+      "fin_pos": true,
+      "dev_ci_excl": true,
+      "fin_ci_excl": true,
+      "bh_pass": false
+    },
+    "BTCUSDT_tail_event": {
+      "passed": false,
+      "dev_pos": false,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "ETHUSDT_realized_vol": {
+      "passed": false,
+      "dev_pos": false,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "ETHUSDT_worst_drawdown": {
+      "passed": false,
+      "dev_pos": false,
+      "fin_pos": true,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "ETHUSDT_tail_event": {
+      "passed": false,
+      "dev_pos": true,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "POOLED_realized_vol": {
+      "passed": false,
+      "dev_pos": false,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": true
+    },
+    "POOLED_worst_drawdown": {
+      "passed": false,
+      "dev_pos": true,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": false
+    },
+    "POOLED_tail_event": {
+      "passed": false,
+      "dev_pos": true,
+      "fin_pos": false,
+      "dev_ci_excl": false,
+      "fin_ci_excl": false,
+      "bh_pass": true
+    }
+  },
+  "passing_tests": [],
+  "targets_fully_passed": [],
+  "overall_stage1_verdict": "NO VOL/TAIL PREDICTABILITY BEYOND BASELINE",
+  "stage2_executed": false,
+  "stage2_results": {}
+}
