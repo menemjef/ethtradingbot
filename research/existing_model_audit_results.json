@@ -1,0 +1,202 @@
+{
+  "provenance": {
+    "active_model_path": "C:\\Python Projects\\trading_bot_export\\checkpoints\\best_model.pt",
+    "training_dataset_candles": 20000,
+    "training_range_start": "2024-05-01 21:00:00+00:00",
+    "training_range_end": "2026-08-13 04:00:00+00:00",
+    "train_samples": 15968,
+    "validation_samples": 3993,
+    "train_val_split_method": "80/20 Chronological split with 12-bar purge gap",
+    "features_count": 53,
+    "target_type": "Triple Barrier Method (TBM)",
+    "target_parameters": {
+      "pt_mult": 3.0,
+      "sl_mult": 1.5,
+      "horizon_bars": 12
+    },
+    "baseline_pre_retrain_status": {
+      "path": "C:\\Python Projects\\trading_bot_backups\\baseline_pre_retrain",
+      "sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+      "dated_from_reports": false,
+      "evaluation_status": "EXCLUDED",
+      "rationale": "Neither training/retrain_report.md nor training/forensic_report.md documents the training start date, end date, or sample range for baseline_pre_retrain. Per pre-registered instructions, its training range cannot be established and it is therefore not evaluated."
+    }
+  },
+  "leakages": [
+    {
+      "category": "Target Lookahead Across Partition Boundaries",
+      "file": "data/indicators.py (lines 292-410) & train.py (lines 286-291)",
+      "description": "add_tbm_target and add_target look ahead H=12 bars into the future (t+1..t+12). If the split boundary is at index S, labels for candles S-11..S-1 peek into the validation partition. Purging H bars at the boundary is strictly required.",
+      "severity": "CRITICAL",
+      "mitigation": "Purge at least H bars (plus 24h embargo) at all split boundaries."
+    },
+    {
+      "category": "StandardScaler Lookahead via Full Dataset Fit",
+      "file": "data/preprocessor.py (lines 208-209)",
+      "description": "fit_and_save_scalers(df) fits StandardScaler across all rows in df. If invoked before train/validation/test splitting, out-of-sample mean and variance leak into training scale factors.",
+      "severity": "HIGH",
+      "mitigation": "Fit scalers strictly on training partition (df_train) only."
+    },
+    {
+      "category": "Regime Model Boundary Leakage (HMM / GARCH)",
+      "file": "data/quant_models.py (lines 59, 92)",
+      "description": "compute_hmm_regimes and compute_garch_volatility use rolling windows but refit every 50 or 100 bars. In legacy code, if computed across the unbroken concatenated dataset, regime boundaries can bridge evaluation cutoffs unless strictly isolated.",
+      "severity": "MEDIUM",
+      "mitigation": "Causal feature generation with strict cutoff t <= decision_time - 5m."
+    },
+    {
+      "category": "Indicator Warmup Pre-roll and Missing Data Filling",
+      "file": "data/indicators.py (lines 243-248)",
+      "description": "Long-lookback indicators (e.g. fib_618_dist_180d with 720 bars = 30 days) require 720 bars of pre-roll warmup. Using bfill() or premature fillna(0.0) would leak future values backward into initial observations.",
+      "severity": "MEDIUM",
+      "mitigation": "Exclude pre-roll observations from training/test sample sets."
+    }
+  ],
+  "oos_evaluation": {
+    "evaluation_period": {
+      "start": "2026-08-13 05:00:00+00:00",
+      "end": "2026-11-05 20:00:00+00:00",
+      "total_bars": 2032
+    },
+    "spearman_ic": {
+      "ic_12_bar": -0.06868558413081424,
+      "p_val_12_bar": 0.0019486910563789406,
+      "ic_4_bar": -0.006191491414213942,
+      "p_val_4_bar": 0.7802991637833732
+    },
+    "directional_accuracy": {
+      "horizon_12_bar": {
+        "accuracy": 0.452755905511811,
+        "ci_low": 0.43094869982735096,
+        "ci_high": 0.4746996179772509,
+        "k": 920,
+        "n": 2032
+      },
+      "horizon_4_bar": {
+        "accuracy": 0.4714566929133858,
+        "ci_low": 0.4495607331854272,
+        "ci_high": 0.49343512204348694,
+        "k": 958,
+        "n": 2032
+      }
+    },
+    "confidence_deciles": [
+      {
+        "decile": 1,
+        "n_samples": 206,
+        "accuracy": 0.5533980582524272,
+        "ci_low": 0.48273200735708205,
+        "ci_high": 0.6225050119146727,
+        "mean_abs_pred": 0.475690633058548
+      },
+      {
+        "decile": 2,
+        "n_samples": 225,
+        "accuracy": 0.4666666666666667,
+        "ci_low": 0.4000795662661967,
+        "ci_high": 0.5341435751809122,
+        "mean_abs_pred": 0.5009075999259949
+      },
+      {
+        "decile": 3,
+        "n_samples": 180,
+        "accuracy": 0.40555555555555556,
+        "ci_low": 0.3331461605869665,
+        "ci_high": 0.48112888355805594,
+        "mean_abs_pred": 0.5139662027359009
+      },
+      {
+        "decile": 4,
+        "n_samples": 204,
+        "accuracy": 0.45588235294117646,
+        "ci_low": 0.3861737131808567,
+        "ci_high": 0.5268918342811484,
+        "mean_abs_pred": 0.528716504573822
+      },
+      {
+        "decile": 5,
+        "n_samples": 201,
+        "accuracy": 0.46766169154228854,
+        "ci_low": 0.3971285634871511,
+        "ci_high": 0.5391627024111255,
+        "mean_abs_pred": 0.5518925786018372
+      },
+      {
+        "decile": 6,
+        "n_samples": 213,
+        "accuracy": 0.5211267605633803,
+        "ci_low": 0.4518050928658832,
+        "ci_high": 0.5898522595813614,
+        "mean_abs_pred": 0.5868651270866394
+      },
+      {
+        "decile": 7,
+        "n_samples": 197,
+        "accuracy": 0.4365482233502538,
+        "ci_low": 0.36618032426653346,
+        "ci_high": 0.5088548679408249,
+        "mean_abs_pred": 0.6236088871955872
+      },
+      {
+        "decile": 8,
+        "n_samples": 199,
+        "accuracy": 0.4120603015075377,
+        "ci_low": 0.3429353199884122,
+        "ci_high": 0.48384573734263703,
+        "mean_abs_pred": 0.6677204966545105
+      },
+      {
+        "decile": 9,
+        "n_samples": 211,
+        "accuracy": 0.41706161137440756,
+        "ci_low": 0.34975070628355115,
+        "ci_high": 0.4867367465363571,
+        "mean_abs_pred": 0.7247292995452881
+      },
+      {
+        "decile": 10,
+        "n_samples": 196,
+        "accuracy": 0.37755102040816324,
+        "ci_low": 0.3094557576751552,
+        "ci_high": 0.449410860695258,
+        "mean_abs_pred": 0.8072428703308105
+      }
+    ],
+    "triple_barrier": {
+      "pt_hits": 389,
+      "sl_hits": 914,
+      "neither": 729,
+      "pt_win_rate": 0.2985418265541059
+    },
+    "threshold_strategy": {
+      "10_bps": {
+        "fee_bps": 10,
+        "final_equity": 0.6453549220699457,
+        "cagr": -0.8489670279625691,
+        "sharpe": -5.573607187304169,
+        "max_drawdown": -0.4171262471636304,
+        "trades": 99,
+        "win_rate": 0.3838383838383838
+      },
+      "20_bps": {
+        "fee_bps": 20,
+        "final_equity": 0.5296682992162934,
+        "cagr": -0.9356166662718256,
+        "sharpe": -7.921461958843661,
+        "max_drawdown": -0.5144184974660807,
+        "trades": 99,
+        "win_rate": 0.36363636363636365
+      }
+    },
+    "power_analysis": {
+      "sample_size_bars": 2032,
+      "effective_sample_size_12h": 169,
+      "mde_ic_independent": 0.06211630352050607,
+      "mde_ic_effective_12h": 0.21408276772787865,
+      "mde_accuracy_independent_pct": 3.1075224959752306,
+      "mde_accuracy_effective_12h_pct": 10.775384615384615,
+      "sample_size_adequate": false,
+      "rationale": "With N=2032 hourly bars (84.7 days) and 12-bar holding periods (effective N ~ 169), the minimum detectable IC at 80% power is 0.214. Financial alpha in liquid crypto perps is rarely above 0.03-0.05. A sample size of at least 10,000 independent bars (>1.5 years) is required to reliably detect realistic edge. The current 85-day OOS period is severely statistically underpowered."
+    }
+  }
+}

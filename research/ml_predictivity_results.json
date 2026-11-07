@@ -1,0 +1,2148 @@
+{
+  "execution_timestamp": "2026-11-07T12:31:41.378118+00:00",
+  "git_commit": "772abb8524e2c16e6ad02b7993bafaa30594c8bd",
+  "final_verdict": "NO ML PREDICTIVITY BEYOND BASELINE",
+  "passing_candidates": [],
+  "part_a_audit": {
+    "provenance": {
+      "active_model_path": "C:\\Python Projects\\trading_bot_export\\checkpoints\\best_model.pt",
+      "training_dataset_candles": 20000,
+      "training_range_start": "2024-05-01 21:00:00+00:00",
+      "training_range_end": "2026-08-13 04:00:00+00:00",
+      "train_samples": 15968,
+      "validation_samples": 3993,
+      "train_val_split_method": "80/20 Chronological split with 12-bar purge gap",
+      "features_count": 53,
+      "target_type": "Triple Barrier Method (TBM)",
+      "target_parameters": {
+        "pt_mult": 3.0,
+        "sl_mult": 1.5,
+        "horizon_bars": 12
+      },
+      "baseline_pre_retrain_status": {
+        "path": "C:\\Python Projects\\trading_bot_backups\\baseline_pre_retrain",
+        "sha256": "8b7b979ec0e586fb02b1a98852329db0d0a38b1baace91c96e28b3646132bd95",
+        "dated_from_reports": false,
+        "evaluation_status": "EXCLUDED",
+        "rationale": "Neither training/retrain_report.md nor training/forensic_report.md documents the training start date, end date, or sample range for baseline_pre_retrain. Per pre-registered instructions, its training range cannot be established and it is therefore not evaluated."
+      }
+    },
+    "leakages": [
+      {
+        "category": "Target Lookahead Across Partition Boundaries",
+        "file": "data/indicators.py (lines 292-410) & train.py (lines 286-291)",
+        "description": "add_tbm_target and add_target look ahead H=12 bars into the future (t+1..t+12). If the split boundary is at index S, labels for candles S-11..S-1 peek into the validation partition. Purging H bars at the boundary is strictly required.",
+        "severity": "CRITICAL",
+        "mitigation": "Purge at least H bars (plus 24h embargo) at all split boundaries."
+      },
+      {
+        "category": "StandardScaler Lookahead via Full Dataset Fit",
+        "file": "data/preprocessor.py (lines 208-209)",
+        "description": "fit_and_save_scalers(df) fits StandardScaler across all rows in df. If invoked before train/validation/test splitting, out-of-sample mean and variance leak into training scale factors.",
+        "severity": "HIGH",
+        "mitigation": "Fit scalers strictly on training partition (df_train) only."
+      },
+      {
+        "category": "Regime Model Boundary Leakage (HMM / GARCH)",
+        "file": "data/quant_models.py (lines 59, 92)",
+        "description": "compute_hmm_regimes and compute_garch_volatility use rolling windows but refit every 50 or 100 bars. In legacy code, if computed across the unbroken concatenated dataset, regime boundaries can bridge evaluation cutoffs unless strictly isolated.",
+        "severity": "MEDIUM",
+        "mitigation": "Causal feature generation with strict cutoff t <= decision_time - 5m."
+      },
+      {
+        "category": "Indicator Warmup Pre-roll and Missing Data Filling",
+        "file": "data/indicators.py (lines 243-248)",
+        "description": "Long-lookback indicators (e.g. fib_618_dist_180d with 720 bars = 30 days) require 720 bars of pre-roll warmup. Using bfill() or premature fillna(0.0) would leak future values backward into initial observations.",
+        "severity": "MEDIUM",
+        "mitigation": "Exclude pre-roll observations from training/test sample sets."
+      }
+    ],
+    "oos_evaluation": {
+      "evaluation_period": {
+        "start": "2026-08-13 05:00:00+00:00",
+        "end": "2026-11-05 20:00:00+00:00",
+        "total_bars": 2032
+      },
+      "spearman_ic": {
+        "ic_12_bar": -0.06868558413081424,
+        "p_val_12_bar": 0.0019486910563789406,
+        "ic_4_bar": -0.006191491414213942,
+        "p_val_4_bar": 0.7802991637833732
+      },
+      "directional_accuracy": {
+        "horizon_12_bar": {
+          "accuracy": 0.452755905511811,
+          "ci_low": 0.43094869982735096,
+          "ci_high": 0.4746996179772509,
+          "k": 920,
+          "n": 2032
+        },
+        "horizon_4_bar": {
+          "accuracy": 0.4714566929133858,
+          "ci_low": 0.4495607331854272,
+          "ci_high": 0.49343512204348694,
+          "k": 958,
+          "n": 2032
+        }
+      },
+      "confidence_deciles": [
+        {
+          "decile": 1,
+          "n_samples": 206,
+          "accuracy": 0.5533980582524272,
+          "ci_low": 0.48273200735708205,
+          "ci_high": 0.6225050119146727,
+          "mean_abs_pred": 0.475690633058548
+        },
+        {
+          "decile": 2,
+          "n_samples": 225,
+          "accuracy": 0.4666666666666667,
+          "ci_low": 0.4000795662661967,
+          "ci_high": 0.5341435751809122,
+          "mean_abs_pred": 0.5009075999259949
+        },
+        {
+          "decile": 3,
+          "n_samples": 180,
+          "accuracy": 0.40555555555555556,
+          "ci_low": 0.3331461605869665,
+          "ci_high": 0.48112888355805594,
+          "mean_abs_pred": 0.5139662027359009
+        },
+        {
+          "decile": 4,
+          "n_samples": 204,
+          "accuracy": 0.45588235294117646,
+          "ci_low": 0.3861737131808567,
+          "ci_high": 0.5268918342811484,
+          "mean_abs_pred": 0.528716504573822
+        },
+        {
+          "decile": 5,
+          "n_samples": 201,
+          "accuracy": 0.46766169154228854,
+          "ci_low": 0.3971285634871511,
+          "ci_high": 0.5391627024111255,
+          "mean_abs_pred": 0.5518925786018372
+        },
+        {
+          "decile": 6,
+          "n_samples": 213,
+          "accuracy": 0.5211267605633803,
+          "ci_low": 0.4518050928658832,
+          "ci_high": 0.5898522595813614,
+          "mean_abs_pred": 0.5868651270866394
+        },
+        {
+          "decile": 7,
+          "n_samples": 197,
+          "accuracy": 0.4365482233502538,
+          "ci_low": 0.36618032426653346,
+          "ci_high": 0.5088548679408249,
+          "mean_abs_pred": 0.6236088871955872
+        },
+        {
+          "decile": 8,
+          "n_samples": 199,
+          "accuracy": 0.4120603015075377,
+          "ci_low": 0.3429353199884122,
+          "ci_high": 0.48384573734263703,
+          "mean_abs_pred": 0.6677204966545105
+        },
+        {
+          "decile": 9,
+          "n_samples": 211,
+          "accuracy": 0.41706161137440756,
+          "ci_low": 0.34975070628355115,
+          "ci_high": 0.4867367465363571,
+          "mean_abs_pred": 0.7247292995452881
+        },
+        {
+          "decile": 10,
+          "n_samples": 196,
+          "accuracy": 0.37755102040816324,
+          "ci_low": 0.3094557576751552,
+          "ci_high": 0.449410860695258,
+          "mean_abs_pred": 0.8072428703308105
+        }
+      ],
+      "triple_barrier": {
+        "pt_hits": 389,
+        "sl_hits": 914,
+        "neither": 729,
+        "pt_win_rate": 0.2985418265541059
+      },
+      "threshold_strategy": {
+        "10_bps": {
+          "fee_bps": 10,
+          "final_equity": 0.6453549220699457,
+          "cagr": -0.8489670279625691,
+          "sharpe": -5.573607187304169,
+          "max_drawdown": -0.4171262471636304,
+          "trades": 99,
+          "win_rate": 0.3838383838383838
+        },
+        "20_bps": {
+          "fee_bps": 20,
+          "final_equity": 0.5296682992162934,
+          "cagr": -0.9356166662718256,
+          "sharpe": -7.921461958843661,
+          "max_drawdown": -0.5144184974660807,
+          "trades": 99,
+          "win_rate": 0.36363636363636365
+        }
+      },
+      "power_analysis": {
+        "sample_size_bars": 2032,
+        "effective_sample_size_12h": 169,
+        "mde_ic_independent": 0.06211630352050607,
+        "mde_ic_effective_12h": 0.21408276772787865,
+        "mde_accuracy_independent_pct": 3.1075224959752306,
+        "mde_accuracy_effective_12h_pct": 10.775384615384615,
+        "sample_size_adequate": false,
+        "rationale": "With N=2032 hourly bars (84.7 days) and 12-bar holding periods (effective N ~ 169), the minimum detectable IC at 80% power is 0.214. Financial alpha in liquid crypto perps is rarely above 0.03-0.05. A sample size of at least 10,000 independent bars (>1.5 years) is required to reliably detect realistic edge. The current 85-day OOS period is severely statistically underpowered."
+      }
+    }
+  },
+  "baselines": {
+    "Ridge_BTC_1h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.004190505358095786,
+        "p_value": 0.5788870664013454,
+        "ic_95_ci": [
+          -0.0106079538373266,
+          0.018987129354536354
+        ],
+        "strat_10_bps": {
+          "final_equity": 1.2102997197088935e-06,
+          "cagr": -0.9988951544512378,
+          "sharpe": -20.653584590725952,
+          "max_drawdown": -0.9999987897002803,
+          "trades": 7077,
+          "win_rate": 0.37756111346615795
+        },
+        "strat_20_bps": {
+          "final_equity": 8.449638680365365e-13,
+          "cagr": -0.9999990727343095,
+          "sharpe": -38.82471086116137,
+          "max_drawdown": -0.999999999999155,
+          "trades": 7077,
+          "win_rate": 0.26706231454005935
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": 0.00958913310986697,
+        "p_value": 0.2226443220043641,
+        "ic_95_ci": [
+          -0.0058225702490041975,
+          0.024996282162770504
+        ],
+        "strat_10_bps": {
+          "final_equity": 2.4049242709714335e-06,
+          "cagr": -0.9990987355597764,
+          "sharpe": -22.956324775676194,
+          "max_drawdown": -0.9999976645561911,
+          "trades": 6889,
+          "win_rate": 0.3643489621135143
+        },
+        "strat_20_bps": {
+          "final_equity": 2.450015215078937e-12,
+          "cagr": -0.999999490035868,
+          "sharpe": -43.523263395493956,
+          "max_drawdown": -0.9999999999975825,
+          "trades": 6889,
+          "win_rate": 0.25257657134562345
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.005563893111738148,
+        "p_value": 0.3069380264050386,
+        "ic_95_ci": [
+          -0.0051101133789783326,
+          0.01623663187597907
+        ],
+        "strat_10_bps": {
+          "final_equity": 2.6284859259707614e-12,
+          "cagr": -0.999024007905936,
+          "sharpe": -21.660972644703808,
+          "max_drawdown": -0.9999999999974315,
+          "trades": 14033,
+          "win_rate": 0.3706263806741253
+        },
+        "strat_20_bps": {
+          "final_equity": 1.6347424353386204e-24,
+          "cagr": -0.999999345122701,
+          "sharpe": -40.94620415575224,
+          "max_drawdown": -1.0,
+          "trades": 14033,
+          "win_rate": 0.2596736264519347
+        }
+      }
+    },
+    "Ridge_ETH_1h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.013214927933928006,
+        "p_value": 0.08006334109783123,
+        "ic_95_ci": [
+          -0.0015831830538759054,
+          0.028007252456467614
+        ],
+        "strat_10_bps": {
+          "final_equity": 8.749963248209758e-07,
+          "cagr": -0.999060487876645,
+          "sharpe": -17.4571400420387,
+          "max_drawdown": -0.9999991303934481,
+          "trades": 7525,
+          "win_rate": 0.3956146179401993
+        },
+        "strat_20_bps": {
+          "final_equity": 2.4914827715558266e-13,
+          "cagr": -0.9999994962902605,
+          "sharpe": -34.48931741093619,
+          "max_drawdown": -0.9999999999997513,
+          "trades": 7525,
+          "win_rate": 0.29820598006644516
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.0019605689146278025,
+        "p_value": 0.8031010870176996,
+        "ic_95_ci": [
+          -0.017370886989404526,
+          0.013450680403589477
+        ],
+        "strat_10_bps": {
+          "final_equity": 8.870336720836547e-07,
+          "cagr": -0.9994750697811727,
+          "sharpe": -16.164636152503775,
+          "max_drawdown": -0.9999991402272996,
+          "trades": 6787,
+          "win_rate": 0.39605127449535876
+        },
+        "strat_20_bps": {
+          "final_equity": 1.1070468128412978e-12,
+          "cagr": -0.9999996684368582,
+          "sharpe": -30.78338139065541,
+          "max_drawdown": -0.999999999998913,
+          "trades": 6787,
+          "win_rate": 0.3077943126565493
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.006511947948487406,
+        "p_value": 0.2317911041022408,
+        "ic_95_ci": [
+          -0.004162044355720462,
+          0.017184456530029917
+        ],
+        "strat_10_bps": {
+          "final_equity": 3.6478199140021947e-13,
+          "cagr": -0.9994159158512205,
+          "sharpe": -17.037121613661633,
+          "max_drawdown": -0.9999999999996391,
+          "trades": 14558,
+          "win_rate": 0.3962082703668086
+        },
+        "strat_20_bps": {
+          "final_equity": 7.91774964831846e-26,
+          "cagr": -0.9999997019176768,
+          "sharpe": -32.929187782885606,
+          "max_drawdown": -1.0,
+          "trades": 14558,
+          "win_rate": 0.3024453908503915
+        }
+      }
+    },
+    "Ridge_Pooled_1h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.016446351591600173,
+        "p_value": 5.616106786877106e-12,
+        "ic_95_ci": [
+          0.011767834238028123,
+          0.021124148888474664
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 72718,
+          "win_rate": 0.49452680216727635
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 72718,
+          "win_rate": 0.4935366759261806
+        }
+      },
+      "Final": {
+        "n_bars": 161760,
+        "spearman_ic": 0.018711271454013138,
+        "p_value": 5.225372033747103e-14,
+        "ic_95_ci": [
+          0.013839256458959816,
+          0.023582398018681467
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 66710,
+          "win_rate": 0.47878878728826263
+        },
+        "strat_20_bps": {
+          "final_equity": NaN,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 66710,
+          "win_rate": 0.4776195472942587
+        }
+      },
+      "Full": {
+        "n_bars": 337200,
+        "spearman_ic": 0.0170095439293213,
+        "p_value": 5.1890069570461365e-23,
+        "ic_95_ci": [
+          0.01363502525865197,
+          0.020383675144215883
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 139621,
+          "win_rate": 0.48700410396716826
+        },
+        "strat_20_bps": {
+          "final_equity": NaN,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 139621,
+          "win_rate": 0.4859297670121257
+        }
+      }
+    },
+    "Ridge_BTC_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": -0.0021467016826631565,
+        "p_value": 0.7761660883200875,
+        "ic_95_ci": [
+          -0.01694396482617792,
+          0.012651501604204593
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.010023807988776761,
+          "cagr": -0.8997364502463907,
+          "sharpe": -6.040407578271275,
+          "max_drawdown": -0.9900015858405163,
+          "trades": 2473,
+          "win_rate": 0.43712090578245044
+        },
+        "strat_20_bps": {
+          "final_equity": 7.08443014709534e-05,
+          "cagr": -0.9915578424194138,
+          "sharpe": -12.334904445278665,
+          "max_drawdown": -0.9999291802994116,
+          "trades": 2473,
+          "win_rate": 0.3663566518398706
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.0023662852837104537,
+        "p_value": 0.7634656370966125,
+        "ic_95_ci": [
+          -0.01777647995767478,
+          0.013045033341452458
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.008717018056672238,
+          "cagr": -0.9234777624292453,
+          "sharpe": -7.331985173630313,
+          "max_drawdown": -0.9918073467934106,
+          "trades": 2533,
+          "win_rate": 0.42005527043031976
+        },
+        "strat_20_bps": {
+          "final_equity": 5.4632959812737686e-05,
+          "cagr": -0.9951030636266338,
+          "sharpe": -14.763242868161297,
+          "max_drawdown": -0.9999480731114544,
+          "trades": 2533,
+          "win_rate": 0.3521515988945914
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": -0.005278273986291615,
+        "p_value": 0.33243513297837424,
+        "ic_95_ci": [
+          -0.015951078337474653,
+          0.005395733017110482
+        ],
+        "strat_10_bps": {
+          "final_equity": 8.177440987172469e-05,
+          "cagr": -0.913424606394359,
+          "sharpe": -6.629675895560131,
+          "max_drawdown": -0.9999226588254397,
+          "trades": 5025,
+          "win_rate": 0.42786069651741293
+        },
+        "strat_20_bps": {
+          "final_equity": 3.483376436891304e-09,
+          "cagr": -0.9936736109773168,
+          "sharpe": -13.429689537132912,
+          "max_drawdown": -0.9999999966789869,
+          "trades": 5025,
+          "win_rate": 0.35880597014925375
+        }
+      }
+    },
+    "Ridge_ETH_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.002485765315811093,
+        "p_value": 0.7419848530959969,
+        "ic_95_ci": [
+          -0.012312488978460575,
+          0.017282930976255474
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.0253212819100329,
+          "cagr": -0.8406898758882074,
+          "sharpe": -3.9876119167446546,
+          "max_drawdown": -0.9794225521792301,
+          "trades": 2479,
+          "win_rate": 0.44251714400968134
+        },
+        "strat_20_bps": {
+          "final_equity": 0.00017679837676939014,
+          "cagr": -0.9866673766647922,
+          "sharpe": -9.421228682802463,
+          "max_drawdown": -0.9998495587520164,
+          "trades": 2479,
+          "win_rate": 0.38967325534489716
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.01900850389244976,
+        "p_value": 0.015622109687355367,
+        "ic_95_ci": [
+          -0.03440926706175422,
+          -0.0035987151704227013
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.0022840847412320606,
+          "cagr": -0.9629693939827004,
+          "sharpe": -5.7815563059981185,
+          "max_drawdown": -0.9977913342151137,
+          "trades": 2437,
+          "win_rate": 0.43824374230611407
+        },
+        "strat_20_bps": {
+          "final_equity": 1.732086600974781e-05,
+          "cagr": -0.9973724261042702,
+          "sharpe": -10.43662031983867,
+          "max_drawdown": -0.9999831507672067,
+          "trades": 2437,
+          "win_rate": 0.3939269593762823
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": -0.006265475159700105,
+        "p_value": 0.24993871950602395,
+        "ic_95_ci": [
+          -0.016938045428666334,
+          0.00440852267853597
+        ],
+        "strat_10_bps": {
+          "final_equity": 5.9891706243486395e-05,
+          "cagr": -0.9201576971502365,
+          "sharpe": -4.91361752579186,
+          "max_drawdown": -0.9999411003675974,
+          "trades": 4972,
+          "win_rate": 0.44066773934030573
+        },
+        "strat_20_bps": {
+          "final_equity": 2.835111904644226e-09,
+          "cagr": -0.9940033799284858,
+          "sharpe": -9.972892337145403,
+          "max_drawdown": -0.9999999971951096,
+          "trades": 4972,
+          "win_rate": 0.3923974255832663
+        }
+      }
+    },
+    "Ridge_Pooled_4h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.009628846074014711,
+        "p_value": 5.5031619976626625e-05,
+        "ic_95_ci": [
+          0.00494964609295855,
+          0.014307624408489055
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 31995,
+          "win_rate": 0.4860134395999375
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 31995,
+          "win_rate": 0.48223159868729487
+        }
+      },
+      "Final": {
+        "n_bars": 161760,
+        "spearman_ic": 0.013712277534201673,
+        "p_value": 3.4835944401084755e-08,
+        "ic_95_ci": [
+          0.008839591298101095,
+          0.018584312591718798
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 29350,
+          "win_rate": 0.47904599659284497
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 29350,
+          "win_rate": 0.47614991482112434
+        }
+      },
+      "Full": {
+        "n_bars": 337200,
+        "spearman_ic": 0.0102757542248934,
+        "p_value": 2.4142549265223464e-09,
+        "ic_95_ci": [
+          0.006900692077539003,
+          0.013650582260619017
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 61393,
+          "win_rate": 0.482856351701334
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 61393,
+          "win_rate": 0.4794520547945205
+        }
+      }
+    },
+    "Ridge_BTC_24h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": -0.008695109360940815,
+        "p_value": 0.24946916717832276,
+        "ic_95_ci": [
+          -0.023489888345591868,
+          0.006103477357727168
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.8131372201068567,
+          "cagr": -0.09820030236212385,
+          "sharpe": -0.013248130801961994,
+          "max_drawdown": -0.4377101420768177,
+          "trades": 546,
+          "win_rate": 0.4945054945054945
+        },
+        "strat_20_bps": {
+          "final_equity": 0.2728543884666831,
+          "cagr": -0.47743259660666526,
+          "sharpe": -1.253437139827466,
+          "max_drawdown": -0.7271763057335998,
+          "trades": 546,
+          "win_rate": 0.45787545787545786
+        }
+      },
+      "Final": {
+        "n_bars": 16162,
+        "spearman_ic": -0.024683001104101942,
+        "p_value": 0.0016999944963652768,
+        "ic_95_ci": [
+          -0.04008526295258411,
+          -0.009269012113726735
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.4660325805426327,
+          "cagr": -0.33908839706910643,
+          "sharpe": -0.8719409122438481,
+          "max_drawdown": -0.5597096218075452,
+          "trades": 551,
+          "win_rate": 0.4646098003629764
+        },
+        "strat_20_bps": {
+          "final_equity": 0.15474850831843928,
+          "cagr": -0.6365541797078781,
+          "sharpe": -2.4005191373739843,
+          "max_drawdown": -0.8510014836727618,
+          "trades": 551,
+          "win_rate": 0.4337568058076225
+        }
+      },
+      "Full": {
+        "n_bars": 33706,
+        "spearman_ic": -0.02155096499626346,
+        "p_value": 7.592989948328344e-05,
+        "ic_95_ci": [
+          -0.0322194715656495,
+          -0.010877548154660821
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.4662858215562912,
+          "cagr": -0.1799826687719851,
+          "sharpe": -0.27019421399636445,
+          "max_drawdown": -0.6753263312612515,
+          "trades": 1099,
+          "win_rate": 0.4858962693357598
+        },
+        "strat_20_bps": {
+          "final_equity": 0.051706818400475495,
+          "cagr": -0.5371722625224076,
+          "sharpe": -1.6467195703941035,
+          "max_drawdown": -0.9482938279266754,
+          "trades": 1099,
+          "win_rate": 0.451319381255687
+        }
+      }
+    },
+    "Ridge_ETH_24h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.03537973961001897,
+        "p_value": 2.7681518687330044e-06,
+        "ic_95_ci": [
+          0.020592719377539807,
+          0.0501512846814578
+        ],
+        "strat_10_bps": {
+          "final_equity": 1.4276106858643989,
+          "cagr": 0.19469328449235968,
+          "sharpe": 0.6073331363437087,
+          "max_drawdown": -0.3829498210111581,
+          "trades": 511,
+          "win_rate": 0.49902152641878667
+        },
+        "strat_20_bps": {
+          "final_equity": 0.5140507471789146,
+          "cagr": -0.28287708297373715,
+          "sharpe": -0.4627744766284441,
+          "max_drawdown": -0.5775331041704037,
+          "trades": 511,
+          "win_rate": 0.4774951076320939
+        }
+      },
+      "Final": {
+        "n_bars": 16162,
+        "spearman_ic": -0.05177199856146543,
+        "p_value": 4.528263105461519e-11,
+        "ic_95_ci": [
+          -0.06713592727575986,
+          -0.036383523412714065
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.06959420039583615,
+          "cagr": -0.7643909179978619,
+          "sharpe": -2.3165392111160537,
+          "max_drawdown": -0.9413972272233196,
+          "trades": 495,
+          "win_rate": 0.4404040404040404
+        },
+        "strat_20_bps": {
+          "final_equity": 0.025796001370134325,
+          "cagr": -0.8624694672848371,
+          "sharpe": -3.2620256147958733,
+          "max_drawdown": -0.9777099205493556,
+          "trades": 495,
+          "win_rate": 0.42828282828282827
+        }
+      },
+      "Full": {
+        "n_bars": 33706,
+        "spearman_ic": 0.0017329338015545034,
+        "p_value": 0.7503778962615444,
+        "ic_95_ci": [
+          -0.008943151161031119,
+          0.012408623742174267
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.08043639291145714,
+          "cagr": -0.480805609155912,
+          "sharpe": -1.008923736594814,
+          "max_drawdown": -0.9657014230908719,
+          "trades": 1014,
+          "win_rate": 0.47041420118343197
+        },
+        "strat_20_bps": {
+          "final_equity": 0.010552379254093582,
+          "cagr": -0.6938651593483409,
+          "sharpe": -2.02504671570572,
+          "max_drawdown": -0.9906130284391581,
+          "trades": 1014,
+          "win_rate": 0.4526627218934911
+        }
+      }
+    },
+    "Ridge_Pooled_24h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.005452238716499081,
+        "p_value": 0.022389089798850282,
+        "ic_95_ci": [
+          0.0007728354346488156,
+          0.010131403230109172
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6862,
+          "win_rate": 0.4798892451180414
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6862,
+          "win_rate": 0.47362285048090935
+        }
+      },
+      "Final": {
+        "n_bars": 161620,
+        "spearman_ic": 0.008387484174329064,
+        "p_value": 0.0007463290920477808,
+        "ic_95_ci": [
+          0.0035122406303806173,
+          0.013262329015394335
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6287,
+          "win_rate": 0.4827421663750596
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6287,
+          "win_rate": 0.47701606489581677
+        }
+      },
+      "Full": {
+        "n_bars": 337060,
+        "spearman_ic": 0.0007748228930533339,
+        "p_value": 0.6528284751541406,
+        "ic_95_ci": [
+          -0.0026011863050368943,
+          0.004150814429233426
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 13155,
+          "win_rate": 0.48110984416571645
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 13155,
+          "win_rate": 0.47518053971873814
+        }
+      }
+    }
+  },
+  "model_b_lightgbm": {
+    "LGBM_BTC_1h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.004686901164900133,
+        "p_value": 0.5347595957037259,
+        "ic_95_ci": [
+          -0.01011160152702551,
+          0.019483351274233826
+        ],
+        "strat_10_bps": {
+          "final_equity": 8.62083560403313e-07,
+          "cagr": -0.999067441725034,
+          "sharpe": -19.355345010389602,
+          "max_drawdown": -0.9999991429103418,
+          "trades": 7095,
+          "win_rate": 0.38534178999295277
+        },
+        "strat_20_bps": {
+          "final_equity": 5.803578271871863e-13,
+          "cagr": -0.999999231428648,
+          "sharpe": -36.94040396524764,
+          "max_drawdown": -0.9999999999994222,
+          "trades": 7095,
+          "win_rate": 0.27906976744186046
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": 0.004957529773744164,
+        "p_value": 0.5283818263742548,
+        "ic_95_ci": [
+          -0.010454111836491998,
+          0.020366816673899762
+        ],
+        "strat_10_bps": {
+          "final_equity": 1.2186301654957298e-06,
+          "cagr": -0.9993764757168216,
+          "sharpe": -22.20236188164924,
+          "max_drawdown": -0.9999988344927535,
+          "trades": 6860,
+          "win_rate": 0.36676384839650145
+        },
+        "strat_20_bps": {
+          "final_equity": 1.3134200203356997e-12,
+          "cagr": -0.999999636253227,
+          "sharpe": -41.48376899027502,
+          "max_drawdown": -0.9999999999987187,
+          "trades": 6860,
+          "win_rate": 0.2619533527696793
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.004627406452378217,
+        "p_value": 0.39548968148113073,
+        "ic_95_ci": [
+          -0.006046595213067461,
+          0.015300353758665959
+        ],
+        "strat_10_bps": {
+          "final_equity": 1.424900119792144e-12,
+          "cagr": -0.9991676342678337,
+          "sharpe": -20.54145155366638,
+          "max_drawdown": -0.9999999999986361,
+          "trades": 13831,
+          "win_rate": 0.3761839346395778
+        },
+        "strat_20_bps": {
+          "final_equity": 1.3254260033577027e-24,
+          "cagr": -0.9999993798766642,
+          "sharpe": -38.84481136974164,
+          "max_drawdown": -1.0,
+          "trades": 13831,
+          "win_rate": 0.2704793579639939
+        }
+      }
+    },
+    "LGBM_BTC_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": -0.0068838783096928985,
+        "p_value": 0.36190484480510243,
+        "ic_95_ci": [
+          -0.021679471296328447,
+          0.007914729327597549
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.0033003765057511973,
+          "cagr": -0.9424480938993723,
+          "sharpe": -7.13526580940259,
+          "max_drawdown": -0.9967983168667942,
+          "trades": 2569,
+          "win_rate": 0.4262358894511483
+        },
+        "strat_20_bps": {
+          "final_equity": 1.922736642054609e-05,
+          "cagr": -0.9956001439794312,
+          "sharpe": -13.27345343306766,
+          "max_drawdown": -0.999981058821271,
+          "trades": 2569,
+          "win_rate": 0.36706889840404827
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": 0.01703601059080648,
+        "p_value": 0.030256731890399024,
+        "ic_95_ci": [
+          0.0016255944541129469,
+          0.032438337172113925
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.010672694951244588,
+          "cagr": -0.9146058391892358,
+          "sharpe": -6.947911141267705,
+          "max_drawdown": -0.9902407070959273,
+          "trades": 2384,
+          "win_rate": 0.42323825503355705
+        },
+        "strat_20_bps": {
+          "final_equity": 9.005265128986131e-05,
+          "cagr": -0.993579783149623,
+          "sharpe": -13.893694982376148,
+          "max_drawdown": -0.9999150137778252,
+          "trades": 2384,
+          "win_rate": 0.36828859060402686
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.0035181796190682903,
+        "p_value": 0.5182653704134077,
+        "ic_95_ci": [
+          -0.00715579210993066,
+          0.01419134972010318
+        ],
+        "strat_10_bps": {
+          "final_equity": 3.846889353725053e-05,
+          "cagr": -0.9288374344865648,
+          "sharpe": -7.054941046214885,
+          "max_drawdown": -0.9999636349206336,
+          "trades": 4915,
+          "win_rate": 0.4244150559511699
+        },
+        "strat_20_bps": {
+          "final_equity": 2.0385294734965097e-09,
+          "cagr": -0.9944961740337087,
+          "sharpe": -13.559002749478196,
+          "max_drawdown": -0.9999999980412108,
+          "trades": 4915,
+          "win_rate": 0.3664292980671414
+        }
+      }
+    },
+    "LGBM_BTC_24h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": -0.03625736382067486,
+        "p_value": 1.5579010719835921e-06,
+        "ic_95_ci": [
+          -0.0510277873126391,
+          -0.02147108229137549
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.15208077972162967,
+          "cagr": -0.6097943104463561,
+          "sharpe": -2.020147842873766,
+          "max_drawdown": -0.8978220836323717,
+          "trades": 505,
+          "win_rate": 0.4396039603960396
+        },
+        "strat_20_bps": {
+          "final_equity": 0.05530355636517861,
+          "cagr": -0.7646193833607303,
+          "sharpe": -3.188790650081517,
+          "max_drawdown": -0.9548557236954033,
+          "trades": 505,
+          "win_rate": 0.4178217821782178
+        }
+      },
+      "Final": {
+        "n_bars": 16162,
+        "spearman_ic": 0.022571510626180336,
+        "p_value": 0.004109179438334339,
+        "ic_95_ci": [
+          0.007156484740537273,
+          0.037975811489870774
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.4495755216466073,
+          "cagr": -0.3518518538958394,
+          "sharpe": -1.0577819943024274,
+          "max_drawdown": -0.6294187005605627,
+          "trades": 500,
+          "win_rate": 0.474
+        },
+        "strat_20_bps": {
+          "final_equity": 0.1653197281801557,
+          "cagr": -0.6232909321559703,
+          "sharpe": -2.588745990740961,
+          "max_drawdown": -0.8540399831799008,
+          "trades": 500,
+          "win_rate": 0.448
+        }
+      },
+      "Full": {
+        "n_bars": 33706,
+        "spearman_ic": -0.008880562219732966,
+        "p_value": 0.10302304319700216,
+        "ic_95_ci": [
+          -0.019554627789677877,
+          0.0017955275193114954
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.07016571891979029,
+          "cagr": -0.49892808488575313,
+          "sharpe": -1.556531099835265,
+          "max_drawdown": -0.9371270945975576,
+          "trades": 1003,
+          "win_rate": 0.45862412761714855
+        },
+        "strat_20_bps": {
+          "final_equity": 0.009411021973181728,
+          "cagr": -0.702844865178667,
+          "sharpe": -2.861334908349508,
+          "max_drawdown": -0.9912392948687676,
+          "trades": 1003,
+          "win_rate": 0.4356929212362911
+        }
+      }
+    },
+    "LGBM_ETH_1h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.009508539248155572,
+        "p_value": 0.20789290865315654,
+        "ic_95_ci": [
+          -0.005290006478103389,
+          0.024302921087474852
+        ],
+        "strat_10_bps": {
+          "final_equity": 8.623097991514771e-07,
+          "cagr": -0.999067319442987,
+          "sharpe": -16.45737876422109,
+          "max_drawdown": -0.9999991419224512,
+          "trades": 7158,
+          "win_rate": 0.3907516065940207
+        },
+        "strat_20_bps": {
+          "final_equity": 5.117215245887373e-13,
+          "cagr": -0.9999992782774926,
+          "sharpe": -32.0764389237421,
+          "max_drawdown": -0.9999999999994883,
+          "trades": 7158,
+          "win_rate": 0.2930986309024867
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": 0.005263278829426613,
+        "p_value": 0.5032642528059796,
+        "ic_95_ci": [
+          -0.010148387241223553,
+          0.020672444974194206
+        ],
+        "strat_10_bps": {
+          "final_equity": 2.4842939298859223e-06,
+          "cagr": -0.9990827355806421,
+          "sharpe": -14.136818795746338,
+          "max_drawdown": -0.9999976628734022,
+          "trades": 6449,
+          "win_rate": 0.4189796867731431
+        },
+        "strat_20_bps": {
+          "final_equity": 6.1037607519873635e-12,
+          "cagr": -0.9999991636594276,
+          "sharpe": -27.546184814036547,
+          "max_drawdown": -0.9999999999940518,
+          "trades": 6449,
+          "win_rate": 0.3371065281438983
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.006729405669071159,
+        "p_value": 0.21657405142632966,
+        "ic_95_ci": [
+          -0.0039445806756598974,
+          0.017401858748633835
+        ],
+        "strat_10_bps": {
+          "final_equity": 2.864297830456031e-12,
+          "cagr": -0.999001963293802,
+          "sharpe": -15.200114140614788,
+          "max_drawdown": -0.9999999999972609,
+          "trades": 13418,
+          "win_rate": 0.4038604859144433
+        },
+        "strat_20_bps": {
+          "final_equity": 6.097589538567928e-24,
+          "cagr": -0.9999990778781791,
+          "sharpe": -29.57575224479453,
+          "max_drawdown": -1.0,
+          "trades": 13418,
+          "win_rate": 0.3130868981964525
+        }
+      }
+    },
+    "LGBM_ETH_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.017161585511785944,
+        "p_value": 0.023018826307369126,
+        "ic_95_ci": [
+          0.002364384562691317,
+          0.03195127276014542
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.009176963423920624,
+          "cagr": -0.9040625379101419,
+          "sharpe": -5.116939096362956,
+          "max_drawdown": -0.9918165325218282,
+          "trades": 2390,
+          "win_rate": 0.4502092050209205
+        },
+        "strat_20_bps": {
+          "final_equity": 7.656502907696302e-05,
+          "cagr": -0.9912238175040549,
+          "sharpe": -10.304039458317684,
+          "max_drawdown": -0.9999268392637617,
+          "trades": 2390,
+          "win_rate": 0.3895397489539749
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.014287119158824732,
+        "p_value": 0.06920820239959721,
+        "ic_95_ci": [
+          -0.02969142472248705,
+          0.001123971232378788
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.003960659248514795,
+          "cagr": -0.9500981999183165,
+          "sharpe": -5.16494635588731,
+          "max_drawdown": -0.9961922212524631,
+          "trades": 2233,
+          "win_rate": 0.44424540976265114
+        },
+        "strat_20_bps": {
+          "final_equity": 4.520049907046947e-05,
+          "cagr": -0.995581081885316,
+          "sharpe": -9.40679284378209,
+          "max_drawdown": -0.9999560210883084,
+          "trades": 2233,
+          "win_rate": 0.4043887147335423
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": 0.003454208494640344,
+        "p_value": 0.5259014332615941,
+        "ic_95_ci": [
+          -0.007219760706791612,
+          0.01412739064377317
+        ],
+        "strat_10_bps": {
+          "final_equity": 3.616902909247511e-05,
+          "cagr": -0.9299688265480544,
+          "sharpe": -5.133321353873571,
+          "max_drawdown": -0.9999661366775333,
+          "trades": 4607,
+          "win_rate": 0.4480138919036249
+        },
+        "strat_20_bps": {
+          "final_equity": 3.5523320232568005e-09,
+          "cagr": -0.9936412891983478,
+          "sharpe": -9.79007986839808,
+          "max_drawdown": -0.9999999965454663,
+          "trades": 4607,
+          "win_rate": 0.3957021923160408
+        }
+      }
+    },
+    "LGBM_ETH_24h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.006789819033534629,
+        "p_value": 0.36850173576341494,
+        "ic_95_ci": [
+          -0.008008787037869048,
+          0.02158545164175424
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.3243858203222379,
+          "cagr": -0.4302501486139283,
+          "sharpe": -0.8845967650671719,
+          "max_drawdown": -0.6957609158254945,
+          "trades": 482,
+          "win_rate": 0.495850622406639
+        },
+        "strat_20_bps": {
+          "final_equity": 0.1235984665936577,
+          "cagr": -0.64820374717689,
+          "sharpe": -1.8456759547337014,
+          "max_drawdown": -0.8800583697123491,
+          "trades": 482,
+          "win_rate": 0.46887966804979253
+        }
+      },
+      "Final": {
+        "n_bars": 16162,
+        "spearman_ic": -0.06080149603589657,
+        "p_value": 1.0239592518494741e-14,
+        "ic_95_ci": [
+          -0.07614763095133775,
+          -0.04542656294377603
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.10771553276111948,
+          "cagr": -0.7013989125079416,
+          "sharpe": -1.7541829887724198,
+          "max_drawdown": -0.9292815460522603,
+          "trades": 502,
+          "win_rate": 0.4581673306772908
+        },
+        "strat_20_bps": {
+          "final_equity": 0.03938697030518426,
+          "cagr": -0.8269803389714778,
+          "sharpe": -2.6651899511047796,
+          "max_drawdown": -0.9722776652431058,
+          "trades": 502,
+          "win_rate": 0.4541832669322709
+        }
+      },
+      "Full": {
+        "n_bars": 33706,
+        "spearman_ic": -0.017013486823071803,
+        "p_value": 0.0017862324584778325,
+        "ic_95_ci": [
+          -0.02768437789009862,
+          -0.006338718645427377
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.03352455643781263,
+          "cagr": -0.5864992876610242,
+          "sharpe": -1.344954590558826,
+          "max_drawdown": -0.9683644709746486,
+          "trades": 983,
+          "win_rate": 0.47914547304170907
+        },
+        "strat_20_bps": {
+          "final_equity": 0.004675239012888794,
+          "cagr": -0.7522792831061171,
+          "sharpe": -2.27091214674283,
+          "max_drawdown": -0.9954928095719267,
+          "trades": 983,
+          "win_rate": 0.46083418107833163
+        }
+      }
+    },
+    "LGBM_Pooled_1h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.0210072213651587,
+        "p_value": 1.3693780992051358e-18,
+        "ic_95_ci": [
+          0.016329403573421917,
+          0.02568411957264538
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 71270,
+          "win_rate": 0.491132313736495
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 71270,
+          "win_rate": 0.4903185070857303
+        }
+      },
+      "Final": {
+        "n_bars": 161760,
+        "spearman_ic": 0.012005297089095692,
+        "p_value": 1.3749978101133117e-06,
+        "ic_95_ci": [
+          0.00713243744280249,
+          0.01687758659409932
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 65930,
+          "win_rate": 0.46960412558774456
+        },
+        "strat_20_bps": {
+          "final_equity": NaN,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 65930,
+          "win_rate": 0.46867890186561506
+        }
+      },
+      "Full": {
+        "n_bars": 337200,
+        "spearman_ic": 0.016845082613171577,
+        "p_value": 1.3397355126368854e-22,
+        "ic_95_ci": [
+          0.013470547021833418,
+          0.020219234492817588
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 137237,
+          "win_rate": 0.4808251419077945
+        },
+        "strat_20_bps": {
+          "final_equity": NaN,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 137237,
+          "win_rate": 0.47995802881147215
+        }
+      }
+    },
+    "LGBM_Pooled_4h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.0254293832827832,
+        "p_value": 1.6904194813554865e-26,
+        "ic_95_ci": [
+          0.02075242971540074,
+          0.030105223915906906
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 30531,
+          "win_rate": 0.5018178245062396
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 30531,
+          "win_rate": 0.49870623300907274
+        }
+      },
+      "Final": {
+        "n_bars": 161760,
+        "spearman_ic": 0.006337343364856559,
+        "p_value": 0.010807962288950815,
+        "ic_95_ci": [
+          0.0014641116514125167,
+          0.011210274081433788
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 27450,
+          "win_rate": 0.45398907103825137
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 27450,
+          "win_rate": 0.4510018214936248
+        }
+      },
+      "Full": {
+        "n_bars": 337200,
+        "spearman_ic": 0.016435461649830896,
+        "p_value": 1.367590643034876e-21,
+        "ic_95_ci": [
+          0.013060884708323287,
+          0.01980966420523772
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 57997,
+          "win_rate": 0.47938686483783643
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 57997,
+          "win_rate": 0.4763349828439402
+        }
+      }
+    },
+    "LGBM_Pooled_24h": {
+      "Development": {
+        "n_bars": 175440,
+        "spearman_ic": 0.0007452075820754728,
+        "p_value": 0.754940074187408,
+        "ic_95_ci": [
+          -0.003934229136594927,
+          0.00542461166514373
+        ],
+        "strat_10_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6783,
+          "win_rate": 0.4670499778858912
+        },
+        "strat_20_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6783,
+          "win_rate": 0.45982603567742886
+        }
+      },
+      "Final": {
+        "n_bars": 161620,
+        "spearman_ic": 0.015107468464234023,
+        "p_value": 1.2491629004757556e-09,
+        "ic_95_ci": [
+          0.010232834993908299,
+          0.019981383907549822
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6206,
+          "win_rate": 0.4229777634547212
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 6206,
+          "win_rate": 0.4171769255559136
+        }
+      },
+      "Full": {
+        "n_bars": 337060,
+        "spearman_ic": 0.007257748520142089,
+        "p_value": 2.5126389581737987e-05,
+        "ic_95_ci": [
+          0.003881841239803981,
+          0.010633490370382354
+        ],
+        "strat_10_bps": {
+          "final_equity": Infinity,
+          "cagr": Infinity,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 12993,
+          "win_rate": 0.4453167089971523
+        },
+        "strat_20_bps": {
+          "final_equity": -Infinity,
+          "cagr": -1.0,
+          "sharpe": 0.0,
+          "max_drawdown": NaN,
+          "trades": 12993,
+          "win_rate": 0.4386207958131301
+        }
+      }
+    }
+  },
+  "model_d_hybrid": {
+    "HybridModel_BTC_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": -0.006290275050988613,
+        "p_value": 0.40477734090972295,
+        "ic_95_ci": [
+          -0.02108611370165602,
+          0.008508318315729561
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.016053250314104636,
+          "cagr": -0.8731343431532306,
+          "sharpe": -5.963395402949695,
+          "max_drawdown": -0.983954266213481,
+          "trades": 2140,
+          "win_rate": 0.41869158878504675
+        },
+        "strat_20_bps": {
+          "final_equity": 0.00022080301111514572,
+          "cagr": -0.9851012886409256,
+          "sharpe": -11.871512029968967,
+          "max_drawdown": -0.9997791969888848,
+          "trades": 2140,
+          "win_rate": 0.35700934579439253
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.012142869901791406,
+        "p_value": 0.12250905363597908,
+        "ic_95_ci": [
+          -0.02754855760804443,
+          0.003268584673636506
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.0138574078635695,
+          "cagr": -0.9016239685480357,
+          "sharpe": -6.87745854264829,
+          "max_drawdown": -0.9865095995687705,
+          "trades": 2064,
+          "win_rate": 0.42829457364341084
+        },
+        "strat_20_bps": {
+          "final_equity": 0.0002218745876418328,
+          "cagr": -0.9895339618809537,
+          "sharpe": -13.094579115594737,
+          "max_drawdown": -0.9997788792203127,
+          "trades": 2064,
+          "win_rate": 0.35852713178294576
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": -0.009376018756095578,
+        "p_value": 0.08512515906867495,
+        "ic_95_ci": [
+          -0.020047715458752124,
+          0.0012978141397041014
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.00019055868886392138,
+          "cagr": -0.892127391690185,
+          "sharpe": -6.502842633619276,
+          "max_drawdown": -0.9998095305354123,
+          "trades": 4209,
+          "win_rate": 0.4195770966975529
+        },
+        "strat_20_bps": {
+          "final_equity": 4.154177726770522e-08,
+          "cagr": -0.9879493104910412,
+          "sharpe": -12.546359561623708,
+          "max_drawdown": -0.9999999584582228,
+          "trades": 4209,
+          "win_rate": 0.35424091233071986
+        }
+      }
+    },
+    "HybridModel_ETH_4h": {
+      "Development": {
+        "n_bars": 17544,
+        "spearman_ic": 0.0009537922924946498,
+        "p_value": 0.899475136298767,
+        "ic_95_ci": [
+          -0.013844204498390876,
+          0.01575137137056661
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.01834623011663048,
+          "cagr": -0.8643818477340215,
+          "sharpe": -4.719248636978813,
+          "max_drawdown": -0.9819037564842065,
+          "trades": 2354,
+          "win_rate": 0.4328802039082413
+        },
+        "strat_20_bps": {
+          "final_equity": 0.0001644534781308252,
+          "cagr": -0.9871409803440218,
+          "sharpe": -10.219550479858722,
+          "max_drawdown": -0.9998368129307297,
+          "trades": 2354,
+          "win_rate": 0.3776550552251487
+        }
+      },
+      "Final": {
+        "n_bars": 16176,
+        "spearman_ic": -0.019469049052577785,
+        "p_value": 0.013278453026265024,
+        "ic_95_ci": [
+          -0.03486942994120503,
+          -0.004059424100586188
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.009216004513872377,
+          "cagr": -0.9211341305253675,
+          "sharpe": -5.001674462645636,
+          "max_drawdown": -0.9912714785956266,
+          "trades": 1967,
+          "win_rate": 0.43721403152008137
+        },
+        "strat_20_bps": {
+          "final_equity": 0.00017907759591830988,
+          "cagr": -0.9906815159970508,
+          "sharpe": -9.20094415707356,
+          "max_drawdown": -0.9998209224040817,
+          "trades": 1967,
+          "win_rate": 0.3879003558718861
+        }
+      },
+      "Full": {
+        "n_bars": 33720,
+        "spearman_ic": -0.008642004278715924,
+        "p_value": 0.11253470811556712,
+        "ic_95_ci": [
+          -0.01931392573462635,
+          0.0020318861615697113
+        ],
+        "strat_10_bps": {
+          "final_equity": 0.00010938702699698347,
+          "cagr": -0.9066226517719034,
+          "sharpe": -5.069280598278777,
+          "max_drawdown": -0.9998921034858157,
+          "trades": 4367,
+          "win_rate": 0.43393634073734827
+        },
+        "strat_20_bps": {
+          "final_equity": 1.736984732856646e-08,
+          "cagr": -0.9903935418506512,
+          "sharpe": -9.88671768067626,
+          "max_drawdown": -0.9999999827639129,
+          "trades": 4367,
+          "win_rate": 0.38149759560338903
+        }
+      }
+    }
+  },
+  "controls": {
+    "shuffled_target_lightgbm_ic": -0.0050006423520422795,
+    "shuffled_target_hybrid_ic": 0.02170958559375967,
+    "shuffled_control_passed": false,
+    "unlagged_btc_4h_ic": -0.0068838783096928985,
+    "lagged_btc_4h_ic": -0.010014467469555371,
+    "lag_control_passed": true
+  },
+  "candidate_tests_bh_table": [
+    {
+      "test_id": "LGBM_BTC_1h",
+      "model": "LightGBM",
+      "universe": "BTC",
+      "horizon": "1h",
+      "dev_ic": 0.004686901164900133,
+      "dev_ci": [
+        -0.01011160152702551,
+        0.019483351274233826
+      ],
+      "final_ic": 0.004957529773744164,
+      "final_ci": [
+        -0.010454111836491998,
+        0.020366816673899762
+      ],
+      "final_p_val": 0.5283818263742548,
+      "ridge_final_ic": 0.00958913310986697,
+      "strat_20bps_dev_sharpe": -36.94040396524764,
+      "strat_20bps_dev_cagr": -0.999999231428648,
+      "strat_20bps_final_sharpe": -41.48376899027502,
+      "strat_20bps_final_cagr": -0.999999636253227,
+      "bh_adjusted_p": 0.5283818263742548,
+      "bh_pass_fdr": false,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": false,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_BTC_4h",
+      "model": "LightGBM",
+      "universe": "BTC",
+      "horizon": "4h",
+      "dev_ic": -0.0068838783096928985,
+      "dev_ci": [
+        -0.021679471296328447,
+        0.007914729327597549
+      ],
+      "final_ic": 0.01703601059080648,
+      "final_ci": [
+        0.0016255944541129469,
+        0.032438337172113925
+      ],
+      "final_p_val": 0.030256731890399024,
+      "ridge_final_ic": -0.0023662852837104537,
+      "strat_20bps_dev_sharpe": -13.27345343306766,
+      "strat_20bps_dev_cagr": -0.9956001439794312,
+      "strat_20bps_final_sharpe": -13.893694982376148,
+      "strat_20bps_final_cagr": -0.993579783149623,
+      "bh_adjusted_p": 0.045385097835598534,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": true,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_BTC_24h",
+      "model": "LightGBM",
+      "universe": "BTC",
+      "horizon": "24h",
+      "dev_ic": -0.03625736382067486,
+      "dev_ci": [
+        -0.0510277873126391,
+        -0.02147108229137549
+      ],
+      "final_ic": 0.022571510626180336,
+      "final_ci": [
+        0.007156484740537273,
+        0.037975811489870774
+      ],
+      "final_p_val": 0.004109179438334339,
+      "ridge_final_ic": -0.024683001104101942,
+      "strat_20bps_dev_sharpe": -3.188790650081517,
+      "strat_20bps_dev_cagr": -0.7646193833607303,
+      "strat_20bps_final_sharpe": -2.588745990740961,
+      "strat_20bps_final_cagr": -0.6232909321559703,
+      "bh_adjusted_p": 0.009862030652002413,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": true,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_ETH_1h",
+      "model": "LightGBM",
+      "universe": "ETH",
+      "horizon": "1h",
+      "dev_ic": 0.009508539248155572,
+      "dev_ci": [
+        -0.005290006478103389,
+        0.024302921087474852
+      ],
+      "final_ic": 0.005263278829426613,
+      "final_ci": [
+        -0.010148387241223553,
+        0.020672444974194206
+      ],
+      "final_p_val": 0.5032642528059796,
+      "ridge_final_ic": -0.0019605689146278025,
+      "strat_20bps_dev_sharpe": -32.0764389237421,
+      "strat_20bps_dev_cagr": -0.9999992782774926,
+      "strat_20bps_final_sharpe": -27.546184814036547,
+      "strat_20bps_final_cagr": -0.9999991636594276,
+      "bh_adjusted_p": 0.5283818263742548,
+      "bh_pass_fdr": false,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": false,
+        "beats_ridge_baseline": true,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_ETH_4h",
+      "model": "LightGBM",
+      "universe": "ETH",
+      "horizon": "4h",
+      "dev_ic": 0.017161585511785944,
+      "dev_ci": [
+        0.002364384562691317,
+        0.03195127276014542
+      ],
+      "final_ic": -0.014287119158824732,
+      "final_ci": [
+        -0.02969142472248705,
+        0.001123971232378788
+      ],
+      "final_p_val": 0.06920820239959721,
+      "ridge_final_ic": -0.01900850389244976,
+      "strat_20bps_dev_sharpe": -10.304039458317684,
+      "strat_20bps_dev_cagr": -0.9912238175040549,
+      "strat_20bps_final_sharpe": -9.40679284378209,
+      "strat_20bps_final_cagr": -0.995581081885316,
+      "bh_adjusted_p": 0.09227760319946295,
+      "bh_pass_fdr": false,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": false,
+        "beats_ridge_baseline": true,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_ETH_24h",
+      "model": "LightGBM",
+      "universe": "ETH",
+      "horizon": "24h",
+      "dev_ic": 0.006789819033534629,
+      "dev_ci": [
+        -0.008008787037869048,
+        0.02158545164175424
+      ],
+      "final_ic": -0.06080149603589657,
+      "final_ci": [
+        -0.07614763095133775,
+        -0.04542656294377603
+      ],
+      "final_p_val": 1.0239592518494741e-14,
+      "ridge_final_ic": -0.05177199856146543,
+      "strat_20bps_dev_sharpe": -1.8456759547337014,
+      "strat_20bps_dev_cagr": -0.64820374717689,
+      "strat_20bps_final_sharpe": -2.6651899511047796,
+      "strat_20bps_final_cagr": -0.8269803389714778,
+      "bh_adjusted_p": 1.228751102219369e-13,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_Pooled_1h",
+      "model": "LightGBM",
+      "universe": "Pooled",
+      "horizon": "1h",
+      "dev_ic": 0.0210072213651587,
+      "dev_ci": [
+        0.016329403573421917,
+        0.02568411957264538
+      ],
+      "final_ic": 0.012005297089095692,
+      "final_ci": [
+        0.00713243744280249,
+        0.01687758659409932
+      ],
+      "final_p_val": 1.3749978101133117e-06,
+      "ridge_final_ic": 0.018711271454013138,
+      "strat_20bps_dev_sharpe": 0.0,
+      "strat_20bps_dev_cagr": -1.0,
+      "strat_20bps_final_sharpe": 0.0,
+      "strat_20bps_final_cagr": -1.0,
+      "bh_adjusted_p": 5.499991240453247e-06,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_Pooled_4h",
+      "model": "LightGBM",
+      "universe": "Pooled",
+      "horizon": "4h",
+      "dev_ic": 0.0254293832827832,
+      "dev_ci": [
+        0.02075242971540074,
+        0.030105223915906906
+      ],
+      "final_ic": 0.006337343364856559,
+      "final_ci": [
+        0.0014641116514125167,
+        0.011210274081433788
+      ],
+      "final_p_val": 0.010807962288950815,
+      "ridge_final_ic": 0.013712277534201673,
+      "strat_20bps_dev_sharpe": 0.0,
+      "strat_20bps_dev_cagr": -1.0,
+      "strat_20bps_final_sharpe": 0.0,
+      "strat_20bps_final_cagr": Infinity,
+      "bh_adjusted_p": 0.02161592457790163,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "LGBM_Pooled_24h",
+      "model": "LightGBM",
+      "universe": "Pooled",
+      "horizon": "24h",
+      "dev_ic": 0.0007452075820754728,
+      "dev_ci": [
+        -0.003934229136594927,
+        0.00542461166514373
+      ],
+      "final_ic": 0.015107468464234023,
+      "final_ci": [
+        0.010232834993908299,
+        0.019981383907549822
+      ],
+      "final_p_val": 1.2491629004757556e-09,
+      "ridge_final_ic": 0.008387484174329064,
+      "strat_20bps_dev_sharpe": 0.0,
+      "strat_20bps_dev_cagr": Infinity,
+      "strat_20bps_final_sharpe": 0.0,
+      "strat_20bps_final_cagr": -1.0,
+      "bh_adjusted_p": 7.494977402854534e-09,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": true,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "HybridModel_BTC_4h",
+      "model": "HybridModel",
+      "universe": "BTC",
+      "horizon": "4h",
+      "dev_ic": -0.006290275050988613,
+      "dev_ci": [
+        -0.02108611370165602,
+        0.008508318315729561
+      ],
+      "final_ic": -0.012142869901791406,
+      "final_ci": [
+        -0.02754855760804443,
+        0.003268584673636506
+      ],
+      "final_p_val": 0.12250905363597908,
+      "ridge_final_ic": -0.0023662852837104537,
+      "strat_20bps_dev_sharpe": -11.871512029968967,
+      "strat_20bps_dev_cagr": -0.9851012886409256,
+      "strat_20bps_final_sharpe": -13.094579115594737,
+      "strat_20bps_final_cagr": -0.9895339618809537,
+      "bh_adjusted_p": 0.1470108643631749,
+      "bh_pass_fdr": false,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": false,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "HybridModel_ETH_4h",
+      "model": "HybridModel",
+      "universe": "ETH",
+      "horizon": "4h",
+      "dev_ic": 0.0009537922924946498,
+      "dev_ci": [
+        -0.013844204498390876,
+        0.01575137137056661
+      ],
+      "final_ic": -0.019469049052577785,
+      "final_ci": [
+        -0.03486942994120503,
+        -0.004059424100586188
+      ],
+      "final_p_val": 0.013278453026265024,
+      "ridge_final_ic": -0.01900850389244976,
+      "strat_20bps_dev_sharpe": -10.219550479858722,
+      "strat_20bps_dev_cagr": -0.9871409803440218,
+      "strat_20bps_final_sharpe": -9.20094415707356,
+      "strat_20bps_final_cagr": -0.9906815159970508,
+      "bh_adjusted_p": 0.02276306233074004,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    },
+    {
+      "test_id": "Existing_Checkpoint_ETH_12h",
+      "model": "Checkpoint_A3",
+      "universe": "ETH",
+      "horizon": "12h",
+      "dev_ic": 0.0,
+      "dev_ci": [
+        0.0,
+        0.0
+      ],
+      "final_ic": -0.06868558413081424,
+      "final_ci": [
+        -0.11216605309220382,
+        -0.025205115169424662
+      ],
+      "final_p_val": 0.0019486910563789406,
+      "ridge_final_ic": -0.05177199856146543,
+      "strat_20bps_dev_sharpe": 0.0,
+      "strat_20bps_dev_cagr": 0.0,
+      "strat_20bps_final_sharpe": -7.921461958843661,
+      "strat_20bps_final_cagr": -0.9356166662718256,
+      "bh_adjusted_p": 0.005846073169136822,
+      "bh_pass_fdr": true,
+      "pass_status": false,
+      "pass_details": {
+        "dev_ic_gt_003_and_ci_excludes_zero": false,
+        "final_ic_gt_003_and_ci_excludes_zero": false,
+        "bh_fdr_p_lt_005": true,
+        "beats_ridge_baseline": false,
+        "threshold_strategy_double_costs": false
+      }
+    }
+  ]
+}
