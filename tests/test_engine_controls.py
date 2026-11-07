@@ -5,7 +5,7 @@ Unit test suite for the Standing Backtest Engine Control Suite.
 Verifies all 8 institutional engine controls across BTCUSDT and ETHUSDT 1H data:
   1. Random-signal control
   2. Perfect-foresight control
-  3. Shifted-date control
+  3. Shifted-date control (tightened 50 shifts between 30 and 365 days; synthetic skill/noskill)
   4. Buy-and-hold replication
   5. Cost monotonicity
   6. Timing control
@@ -24,6 +24,7 @@ from research.scripts.run_engine_controls import (
     run_control_1_random_signal,
     run_control_2_perfect_foresight,
     run_control_3_shifted_date,
+    evaluate_synthetic_timing_signal,
     run_control_4_buy_and_hold_replication,
     run_control_5_cost_monotonicity,
     run_control_6_timing,
@@ -55,15 +56,25 @@ class TestEngineControls(unittest.TestCase):
         res = run_control_2_perfect_foresight(symbol="ETHUSDT", max_bars=3000)
         self.assertEqual(res.status, "PASS", f"Control 2 ETH failed: {res.diagnostics}")
 
-    def test_control_3_shifted_date_btc(self):
-        """Control 3: Shifted signals on BTCUSDT collapse performance toward random distribution."""
-        res = run_control_3_shifted_date(symbol="BTCUSDT", shift_days=45, max_bars=8000)
-        self.assertEqual(res.status, "PASS", f"Control 3 BTC failed: {res.diagnostics}")
+    def test_control_3_synthetic_with_timing_skill_passes(self):
+        """Control 3: Synthetic signal with true timing skill must pass tightened shifted-date test."""
+        res = evaluate_synthetic_timing_signal(has_skill=True, n_bars=3000, n_shifts=50, seed=42)
+        self.assertEqual(res.status, "PASS", f"Synthetic timing skill should pass: {res.diagnostics}")
 
-    def test_control_3_shifted_date_eth(self):
-        """Control 3: Shifted signals on ETHUSDT collapse performance toward random distribution."""
-        res = run_control_3_shifted_date(symbol="ETHUSDT", shift_days=45, max_bars=8000)
-        self.assertEqual(res.status, "PASS", f"Control 3 ETH failed: {res.diagnostics}")
+    def test_control_3_synthetic_without_timing_skill_flags_no_timing_evidence(self):
+        """Control 3: Synthetic signal without timing skill must produce NO TIMING EVIDENCE."""
+        res = evaluate_synthetic_timing_signal(has_skill=False, n_bars=3000, n_shifts=50, seed=42)
+        self.assertEqual(res.status, "NO TIMING EVIDENCE", f"Synthetic no-skill should flag NO TIMING EVIDENCE: {res.diagnostics}")
+
+    def test_control_3_shifted_date_btc_f0(self):
+        """Control 3: Shifted-date control on BTCUSDT F0 satisfies tightened timing criteria."""
+        res = run_control_3_shifted_date(symbol="BTCUSDT", strategy="F0", n_shifts=50, seed=42)
+        self.assertEqual(res.status, "PASS", f"BTC F0 expected to pass: {res.diagnostics}")
+
+    def test_control_3_shifted_date_btc_g0_finding(self):
+        """Control 3: Shifted-date control on BTCUSDT G0 flags NO TIMING EVIDENCE (empirical finding)."""
+        res = run_control_3_shifted_date(symbol="BTCUSDT", strategy="G0", n_shifts=50, seed=42)
+        self.assertEqual(res.status, "NO TIMING EVIDENCE", f"BTC G0 expected to flag NO TIMING EVIDENCE: {res.diagnostics}")
 
     def test_control_4_buy_and_hold_replication_btc(self):
         """Control 4: Buy-and-hold matches analytical formula within 0.1% on BTCUSDT."""

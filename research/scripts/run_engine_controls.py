@@ -217,58 +217,141 @@ def run_control_2_perfect_foresight(
     )
 
 
+def evaluate_synthetic_timing_signal(
+    has_skill: bool,
+    n_bars: int = 4000,
+    n_shifts: int = 50,
+    seed: int = 42,
+) -> ControlResult:
+    """Evaluates a synthetic signal with either true timing skill or zero skill across 50 shifts."""
+    rng = np.random.default_rng(seed)
+    rets = rng.normal(0.0002 if not has_skill else 0.0, 0.01, size=n_bars)
+
+    if has_skill:
+        # Predicts next bar return with 85% accuracy
+        target = np.roll(rets, -1)
+        sig = np.sign(target)
+        flip = rng.choice([True, False], size=n_bars, p=[0.15, 0.85])
+        sig[flip] = -sig[flip]
+    else:
+        # Constant uninformative exposure (zero timing skill)
+        sig = np.ones(n_bars)
+
+    real_rets = sig[:-1] * rets[1:]
+    real_sh = float(np.mean(real_rets) / (np.std(real_rets) + 1e-9) * np.sqrt(8760))
+    real_pnl = float(np.sum(real_rets) * 1000.0)
+
+    shifts = rng.integers(30, 366, size=n_shifts)
+    sh_list = []
+    pnl_list = []
+    for d in shifts:
+        s_sig = np.roll(sig, d * 4)
+        s_rets = s_sig[:-1] * rets[1:]
+        sh = float(np.mean(s_rets) / (np.std(s_rets) + 1e-9) * np.sqrt(8760))
+        sh_list.append(sh)
+        pnl_list.append(float(np.sum(s_rets) * 1000.0))
+
+    med_sh = float(np.median(sh_list))
+    beat_rate = float(np.mean([s >= real_sh for s in sh_list]))
+    p5 = float(np.percentile(pnl_list, 5))
+    p50 = float(np.percentile(pnl_list, 50))
+    p95 = float(np.percentile(pnl_list, 95))
+
+    passes = (med_sh < 0.5 * real_sh) and (beat_rate < 0.10)
+    status = "PASS" if passes else "NO TIMING EVIDENCE"
+    diag = (
+        f"Synthetic ({'Timing Skill' if has_skill else 'No Skill'}): Real SR {real_sh:.2f} -> "
+        f"Shifted Median SR {med_sh:.2f}, >=Real: {beat_rate*100:.1f}%, PnL 5/50/95: [${p5:.0f}, ${p50:.0f}, ${p95:.0f}]"
+    )
+
+    return ControlResult(
+        control_id=3,
+        name="Shifted-Date Control (Synthetic)",
+        target_or_asset=f"SYNTH_{'SKILL' if has_skill else 'NOSKILL'}",
+        observed_metric=f"Real SR: {real_sh:.2f}, Med Shifted: {med_sh:.2f}, >=Real: {beat_rate*100:.1f}%, PnL 5/50/95: [${p5:.0f}, ${p50:.0f}, ${p95:.0f}]",
+        threshold_or_target="Med SR < 50% Real & >=Real < 10%",
+        status=status,
+        diagnostics=diag,
+    )
+
+
 def run_control_3_shifted_date(
     symbol: str = "BTCUSDT",
-    shift_days: int = 45,
-    max_bars: int = 15000,
+    strategy: str = "G0",
+    n_shifts: int = 50,
+    seed: int = 42,
+    max_bars: Optional[int] = None,
 ) -> ControlResult:
-    """Control 3: Shifted-date control.
-    Shift real signals by a random number of days; performance must collapse toward the random distribution.
+    """Control 3: Tightened shifted-date control.
+    Uses 50 random shifts between 30 and 365 days (fixed seed).
+    Applies to G0, G1, G2, and F0 on BTCUSDT and ETHUSDT.
+    Reports: real Sharpe, median shifted Sharpe, share of shifts >= real Sharpe,
+    and shifted PnL percentiles (5th, 50th, 95th).
+    PASS only if median shifted Sharpe < 50% real Sharpe AND < 10% of shifts >= real Sharpe.
+    Otherwise status is 'NO TIMING EVIDENCE' (a finding, not a pass).
     """
     df, fd = lns.load_symbol(symbol)
     if max_bars and len(df) > max_bars:
         df = df.iloc[:max_bars]
 
     # Real unshifted performance
-    res_real = lns.run_strategy("G0", df, fd, symbol=symbol)
-    real_trades = res_real["trades"]
-    real_pnl = sum(t["trade_pnl_usd"] for t in real_trades)
-    real_sharpe = res_real.get("sharpe", None)
-    if real_sharpe is None:
-        eq_ret = res_real["equity"].pct_change().dropna()
-        real_sharpe = float(np.mean(eq_ret) / (np.std(eq_ret) + 1e-9) * np.sqrt(8760))
+    res_real = lns.run_strategy(strategy, df, fd, symbol=symbol)
+    eq_real = res_real["equity"].pct_change().dropna()
+    real_sharpe = float(np.mean(eq_real) / (np.std(eq_real) + 1e-9) * np.sqrt(8760))
+    real_pnl = float(res_real["equity"].iloc[-1] - res_real["equity"].iloc[0])
 
-    # Shift real signals circularly by shift_days * 4 (6h bars)
-    feat6 = lns.g_features(df, variant="G0", donchian_n=20)
-    shift_bars = shift_days * 4
-    feat_shifted = feat6.copy()
-    feat_shifted["long_sig"] = np.roll(feat_shifted["long_sig"].values, shift_bars)
-    feat_shifted["short_sig"] = np.roll(feat_shifted["short_sig"].values, shift_bars)
+    rng = np.random.default_rng(seed)
+    shifts = rng.integers(30, 366, size=n_shifts)
 
-    res_shifted = lns.simulate_g(
-        df, fd, feat_shifted, atr_mult=lns.ATR_MULT, fee=lns.FEE_BASE, symbol=symbol, strategy="G0_shifted"
-    )
-    shifted_trades = res_shifted["trades"]
-    shifted_pnl = sum(t["trade_pnl_usd"] for t in shifted_trades)
-    eq_ret_s = res_shifted["equity"].pct_change().dropna()
-    shifted_sharpe = float(np.mean(eq_ret_s) / (np.std(eq_ret_s) + 1e-9) * np.sqrt(8760))
+    shifted_sharpes = []
+    shifted_pnls = []
 
-    # Performance collapse check: Sharpe collapses relative to real or drops near zero/negative
-    sharpe_collapse = (shifted_sharpe < real_sharpe * 0.7) or (shifted_sharpe < 0.5)
-    pnl_degradation = shifted_pnl < real_pnl
+    if strategy in ("G0", "G1", "G2"):
+        feat6 = lns.g_features(df, variant=strategy)
+        for d in shifts:
+            shift_bars = int(d * 4)
+            f_s = feat6.copy()
+            f_s["long_sig"] = np.roll(f_s["long_sig"].values, shift_bars)
+            f_s["short_sig"] = np.roll(f_s["short_sig"].values, shift_bars)
+            res_s = lns.simulate_g(df, fd, f_s, symbol=symbol, strategy=strategy)
+            eq_s = res_s["equity"].pct_change().dropna()
+            sh = float(np.mean(eq_s) / (np.std(eq_s) + 1e-9) * np.sqrt(8760))
+            shifted_sharpes.append(sh)
+            shifted_pnls.append(float(res_s["equity"].iloc[-1] - res_s["equity"].iloc[0]))
+    elif strategy == "F0":
+        feat1d = lns.f0_features(df)
+        for d in shifts:
+            shift_bars = int(d)
+            f_s = feat1d.copy()
+            f_s["target"] = np.roll(f_s["target"].values, shift_bars)
+            res_s = lns.simulate_f0(df, fd, f_s, symbol=symbol, strategy=strategy)
+            eq_s = res_s["equity"].pct_change().dropna()
+            sh = float(np.mean(eq_s) / (np.std(eq_s) + 1e-9) * np.sqrt(8760))
+            shifted_sharpes.append(sh)
+            shifted_pnls.append(float(res_s["equity"].iloc[-1] - res_s["equity"].iloc[0]))
+    else:
+        raise ValueError(f"Unsupported strategy for shifted-date control: {strategy}")
 
-    status = "PASS" if (sharpe_collapse or pnl_degradation) else "FAIL"
+    med_sharpe = float(np.median(shifted_sharpes))
+    beat_rate = float(np.mean([s >= real_sharpe for s in shifted_sharpes]))
+    p5 = float(np.percentile(shifted_pnls, 5))
+    p50 = float(np.percentile(shifted_pnls, 50))
+    p95 = float(np.percentile(shifted_pnls, 95))
+
+    pass_cond = (med_sharpe < 0.5 * real_sharpe) and (beat_rate < 0.10)
+    status = "PASS" if pass_cond else "NO TIMING EVIDENCE"
+
     diag = (
-        f"Shifted by {shift_days} days ({shift_bars} 6H bars): "
-        f"Real Sharpe {real_sharpe:.2f} (PnL ${real_pnl:.2f}) -> Shifted Sharpe {shifted_sharpe:.2f} (PnL ${shifted_pnl:.2f})"
+        f"Real SR: {real_sharpe:.2f} (PnL ${real_pnl:.2f}) -> Shifted Median SR: {med_sharpe:.2f}, "
+        f">=Real: {beat_rate*100:.1f}%, PnL 5/50/95: [${p5:.0f}, ${p50:.0f}, ${p95:.0f}] across {n_shifts} shifts (30-365d)"
     )
 
     return ControlResult(
         control_id=3,
         name="Shifted-Date Control",
-        target_or_asset=f"{symbol} (+{shift_days}d)",
-        observed_metric=f"Sharpe: {shifted_sharpe:.2f}, PnL: ${shifted_pnl:.2f}",
-        threshold_or_target=f"Sharpe < {real_sharpe:.2f} and collapsed toward random",
+        target_or_asset=f"{symbol} {strategy}",
+        observed_metric=f"Real SR: {real_sharpe:.2f}, Med Shifted: {med_sharpe:.2f}, >=Real: {beat_rate*100:.1f}%, PnL 5/50/95: [${p5:.0f}, ${p50:.0f}, ${p95:.0f}]",
+        threshold_or_target="Med SR < 50% Real & >=Real < 10%",
         status=status,
         diagnostics=diag,
     )
@@ -711,12 +794,16 @@ def run_all_controls() -> List[ControlResult]:
     r2_eth = run_control_2_perfect_foresight(symbol="ETHUSDT")
     results.append(r2_eth)
 
-    # Control 3: Shifted-date control (BTC & ETH)
-    print("[3/8] Running Control 3 (Shifted-Date Signal Decoupling)...")
-    r3_btc = run_control_3_shifted_date(symbol="BTCUSDT", shift_days=45)
-    results.append(r3_btc)
-    r3_eth = run_control_3_shifted_date(symbol="ETHUSDT", shift_days=45)
-    results.append(r3_eth)
+    # Control 3: Shifted-date control (Tightened: 50 shifts across G0, G1, G2, F0 on BTC & ETH + Synthetics)
+    print("[3/8] Running Control 3 (Tightened Shifted-Date Control, 50 shifts [30-365d] on G0, G1, G2, F0)...")
+    for sym in ["BTCUSDT", "ETHUSDT"]:
+        for strat in ["G0", "G1", "G2", "F0"]:
+            r3 = run_control_3_shifted_date(symbol=sym, strategy=strat, n_shifts=50, seed=42)
+            results.append(r3)
+    r3_skill = evaluate_synthetic_timing_signal(has_skill=True, n_bars=4000, n_shifts=50, seed=42)
+    results.append(r3_skill)
+    r3_noskill = evaluate_synthetic_timing_signal(has_skill=False, n_bars=4000, n_shifts=50, seed=42)
+    results.append(r3_noskill)
 
     # Control 4: Buy-and-hold replication (BTC & ETH)
     print("[4/8] Running Control 4 (Buy-and-Hold Analytical Replication within 0.1%)...")
@@ -776,14 +863,15 @@ def generate_report(results: List[ControlResult], report_path: Optional[str] = N
     table_md = format_markdown_table(results)
 
     n_pass = sum(1 for r in results if r.status == "PASS")
+    n_finding = sum(1 for r in results if r.status == "NO TIMING EVIDENCE")
     n_fail = sum(1 for r in results if r.status == "FAIL")
-    overall_status = "ALL CONTROLS PASSED" if n_fail == 0 else f"{n_fail} FINDINGS DETECTED"
+    overall_status = f"{n_pass} PASSED, {n_finding} NO TIMING EVIDENCE, {n_fail} FAILED" if (n_finding > 0 or n_fail > 0) else "ALL CONTROLS PASSED"
 
     content = f"""# Standing Engine Control Suite: Audit Report
 
 **Date:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
-**Overall Status:** **`{overall_status}`** ({n_pass} Passed, {n_fail} Failed)  
-**Evaluated Systems:** Validated Backtest Engine, Trend Strategies (G0/F0), Market-Neutral (N1/N2), OI & Volatility Predictivity Code.
+**Overall Status:** **`{overall_status}`** ({n_pass} Passed, {n_finding} No Timing Evidence, {n_fail} Failed)  
+**Evaluated Systems:** Validated Backtest Engine, Trend Strategies (G0/G1/G2/F0), Market-Neutral (N1/N2), OI & Volatility Predictivity Code.
 
 ---
 
@@ -797,7 +885,7 @@ def generate_report(results: List[ControlResult], report_path: Optional[str] = N
 
 1. **Random-Signal Control (500 repeats):** Confirms that an uninformative entry signal has zero gross alpha and incurs expected negative friction close to minus total transaction costs (fees, slippage, and funding). A strictly non-positive mean verifies absence of upward survival bias or phantom drift.
 2. **Perfect-Foresight Control:** Asserts that an engine given 1-step lookahead information captures large profits, verifying direction sign, execution, and sizing.
-3. **Shifted-Date Control:** Verifies that temporally shifting real strategy signals destroys empirical edge, causing performance to collapse toward the uninformative distribution.
+3. **Shifted-Date Control (50 random shifts between 30 and 365 days):** Applied to G0, G1, G2, and F0 on BTCUSDT and ETHUSDT, alongside synthetic positive and negative timing benchmarks. A strategy passes only if its median shifted Sharpe is below 50% of the real Sharpe AND fewer than 10% of shifts match or exceed the real Sharpe. Otherwise, status is `NO TIMING EVIDENCE` (an empirical finding).
 4. **Buy-and-Hold Replication:** Proves mathematical identity between engine continuous holding and the analytical price return plus funding minus entry and exit costs within 0.1%.
 5. **Cost Monotonicity:** Verifies strictly monotonic performance degradation from 0 bps to 10 bps to 20 bps transaction friction.
 6. **Timing Control:** Verifies that moving execution fills from next bar open to current bar close alters entry prices and trade returns, proving no instantaneous close lookahead.
