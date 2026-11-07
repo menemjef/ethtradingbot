@@ -53,6 +53,14 @@ DATA_END = pd.Timestamp("2026-11-05 23:59:59+00:00")
 # Initial walk-forward evaluation start date (ensures 180+ days training history for all coins)
 EVAL_START_DATE = pd.Timestamp("2022-07-01 00:00:00+00:00")
 
+# Run Logger Integration
+from research.scripts.run_logger import (
+    log_final_split_read,
+    check_final_split_already_logged,
+    DEFAULT_RUN_LOG_PATH,
+    get_current_git_commit
+)
+
 # Cryptographic Lock State
 _FINAL_UNLOCKED = False
 
@@ -499,7 +507,7 @@ def evaluate_forecasts(res_df: pd.DataFrame, target_type: str,
         ci_lower = float(np.percentile(boot_improvements, 2.5))
         ci_upper = float(np.percentile(boot_improvements, 97.5))
         p_val = float(2.0 * min(np.mean(boot_improvements <= 0.0), np.mean(boot_improvements >= 0.0)))
-        metric_name = "OOS R-squared Improvement"
+        metric_name = "relative MSE reduction"
 
     elif target_type == "tail_event":
         # Binary target tail_event. Metric: Brier Skill Score improvement & AUC difference
@@ -1062,27 +1070,51 @@ def write_vol_tail_report(res: Dict[str, Any], final_log: Dict[str, Any]) -> Non
     md.append("")
     md.append("## Stage 1 Detailed Findings & Failure Modes")
     md.append("")
+    # Dynamic computation of metrics across universes
+    rv_dev_imps = [s1["dev"][f"{u}_realized_vol"]["improvement"] for u in UNIVERSES]
+    rv_fin_imps = [s1["final"][f"{u}_realized_vol"]["improvement"] for u in UNIVERSES]
+    rv_all_imps = rv_dev_imps + rv_fin_imps
+    rv_min, rv_max = min(rv_all_imps), max(rv_all_imps)
+    rv_ci_span_zero = all(
+        s1[s][f"{u}_realized_vol"]["ci_lower"] <= 0.0 <= s1[s][f"{u}_realized_vol"]["ci_upper"]
+        for s in ["dev", "final"] for u in UNIVERSES
+    )
+
+    dd_dev_imps = [s1["dev"][f"{u}_worst_drawdown"]["improvement"] for u in UNIVERSES]
+    dd_fin_imps = [s1["final"][f"{u}_worst_drawdown"]["improvement"] for u in UNIVERSES]
+    dd_all_imps = dd_dev_imps + dd_fin_imps
+    dd_min, dd_max = min(dd_all_imps), max(dd_all_imps)
+    dd_padjs = [s1["final"][f"{u}_worst_drawdown"]["p_adjusted"] for u in UNIVERSES]
+    dd_padj_min, dd_padj_max = min(dd_padjs), max(dd_padjs)
+
+    tail_dev_imps = [s1["dev"][f"{u}_tail_event"]["improvement"] for u in UNIVERSES]
+    tail_fin_imps = [s1["final"][f"{u}_tail_event"]["improvement"] for u in UNIVERSES]
+    tail_all_imps = tail_dev_imps + tail_fin_imps
+    tail_min, tail_max = min(tail_all_imps), max(tail_all_imps)
+    tail_padjs = [s1["final"][f"{u}_tail_event"]["p_adjusted"] for u in UNIVERSES]
+    tail_padj_min, tail_padj_max = min(tail_padjs), max(tail_padjs)
+
     md.append("### 1. Realized Volatility Forecasts (HAR-RV vs. HAR-RV + Metrics)")
     md.append(
-        "- **Baseline HAR-RV Performance:** The benchmark log-HAR model using 1-day, 7-day, and 30-day realized volatility "
-        "captures over 90% of predictable volatility clustering via autoregressive momentum.\n"
-        "- **Augmented Model QLIKE Loss:** Adding open interest, long/short ratios, and taker flows yielded essentially zero QLIKE loss improvement "
-        "(improvements ranged from -0.005 to +0.004 across BTC, ETH, and Pooled Panel). All bootstrap 95% confidence intervals spanned zero.\n"
-        "- **Conclusion:** Public positioning metrics do not provide marginal explanatory power beyond trailing realized volatility for predicting next-day variance."
+        f"- **Baseline HAR-RV Performance:** The benchmark log-HAR model uses 1-day, 7-day, and 30-day trailing realized volatility.\n"
+        f"- **Augmented Model QLIKE Loss:** Adding open interest, long/short ratios, and taker flows yielded QLIKE loss improvements "
+        f"ranging from {rv_min:+.4f} to {rv_max:+.4f} across {', '.join(UNIVERSES)}. "
+        f"Bootstrap 95% confidence intervals spanned zero: {'Yes (all)' if rv_ci_span_zero else 'No'}.\n"
+        f"- **Conclusion:** Public positioning metrics do not provide statistically significant explanatory power beyond trailing realized volatility for predicting next-day variance."
     )
     md.append("")
     md.append("### 2. Worst Drawdown Forecasts (Trailing 30d Vol vs. Augmented)")
     md.append(
-        "- **Drawdown Predictability:** Intrabar tail dips from open are predominantly driven by overall volatility regime. "
-        "The OOS $R^2$ improvement was negative or indistinguishable from zero (e.g., $R^2_{\\text{OOS}} \\le 0.01$).\n"
-        "- **FDR Significance:** After Benjamini-Hochberg adjustment, no drawdown test reached the 5% significance threshold."
+        f"- **Drawdown Predictability:** Relative MSE reduction ranged from {dd_min:+.4f} to {dd_max:+.4f} across development and final splits.\n"
+        f"- **FDR Significance:** After Benjamini-Hochberg adjustment across all final tests, adjusted p-values for drawdown ranged from {dd_padj_min:.4f} to {dd_padj_max:.4f}; "
+        f"none reached the 5% significance threshold (alpha = 0.05)."
     )
     md.append("")
     md.append("### 3. Binary Tail-Risk Forecasts (Extreme Absolute Return > $3\\sigma$)")
     md.append(
-        "- **Brier Skill Score:** Extreme tail shocks (> $3\\sigma$ moves) occur with ~1% empirical frequency. "
-        "Augmenting with positioning ratios failed to produce higher probability separation before tail events occurred.\n"
-        "- **AUC Comparison:** The AUC of the augmented classifier was virtually identical to baseline trailing volatility (AUC delta < 0.02)."
+        f"- **Brier Skill Score:** Brier Skill Score improvements ranged from {tail_min:+.4f} to {tail_max:+.4f} across splits.\n"
+        f"- **FDR Significance:** Adjusted p-values for tail risk ranged from {tail_padj_min:.4f} to {tail_padj_max:.4f}; "
+        f"none reached the 5% significance threshold."
     )
     md.append("")
     md.append("---")

@@ -1,0 +1,588 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-11-07T09:58:54.207804+00:00",
+    "git_commit": "0c7650ae65219dbed5dc9166351e9924c1c26a40",
+    "final_log_entry": {
+      "timestamp": "2026-11-07T09:58:50.013499+00:00",
+      "experiment_name": "vol_target_beta",
+      "git_commit": "0c7650ae65219dbed5dc9166351e9924c1c26a40",
+      "split": "Final"
+    },
+    "dev_range": "2020-09-01 to 2024-12-31",
+    "final_range": "2025-01-01 to 2026-11-05",
+    "rebalance_band": 0.25,
+    "vol_target": 0.4
+  },
+  "splits": {
+    "Development": {
+      "BTCUSDT": {
+        "10bps": {
+          "BH": {
+            "final_equity": 41716.371995102374,
+            "cagr": 0.39035292250413645,
+            "cagr_pct": 39.04,
+            "sharpe": 0.842,
+            "sortino": 0.885,
+            "max_dd": -0.8071345531000853,
+            "max_dd_pct": 80.71,
+            "worst_month_pct": -37.44,
+            "avg_exposure": 1.0,
+            "turnover": 0.23,
+            "total_trades": 1,
+            "total_fees_usd": 10.0,
+            "total_funding_usd": 16952.21,
+            "cost_drag_pct": 39.14
+          },
+          "V1": {
+            "final_equity": 35077.73155523283,
+            "cagr": 0.3358467445160189,
+            "cagr_pct": 33.58,
+            "sharpe": 0.875,
+            "sortino": 0.921,
+            "max_dd": -0.6869900719732263,
+            "max_dd_pct": 68.7,
+            "worst_month_pct": -25.52,
+            "avg_exposure": 0.775,
+            "turnover": 11.29,
+            "total_trades": 206,
+            "total_fees_usd": 915.43,
+            "total_funding_usd": 8961.81,
+            "cost_drag_pct": 22.79
+          },
+          "V2": {
+            "final_equity": 50857.617286274784,
+            "cagr": 0.4553903461071256,
+            "cagr_pct": 45.54,
+            "sharpe": 1.127,
+            "sortino": 0.769,
+            "max_dd": -0.4998203045229518,
+            "max_dd_pct": 49.98,
+            "worst_month_pct": -43.0,
+            "avg_exposure": 0.399,
+            "turnover": 3.46,
+            "total_trades": 15,
+            "total_fees_usd": 487.54,
+            "total_funding_usd": 14835.68,
+            "cost_drag_pct": 35.36
+          }
+        },
+        "20bps": {
+          "BH": {
+            "final_equity": 41675.54810150776,
+            "cagr": 0.3900388674479369,
+            "cagr_pct": 39.0,
+            "sharpe": 0.841,
+            "sortino": 0.884,
+            "max_dd": -0.8071345531000853,
+            "max_dd_pct": 80.71,
+            "worst_month_pct": -37.44,
+            "avg_exposure": 1.0,
+            "turnover": 0.23,
+            "total_trades": 1,
+            "total_fees_usd": 20.0,
+            "total_funding_usd": 16935.63,
+            "cost_drag_pct": 39.12
+          },
+          "V1": {
+            "final_equity": 33400.85573720253,
+            "cagr": 0.32083341907460716,
+            "cagr_pct": 32.08,
+            "sharpe": 0.85,
+            "sortino": 0.896,
+            "max_dd": -0.6956282144777515,
+            "max_dd_pct": 69.56,
+            "worst_month_pct": -25.65,
+            "avg_exposure": 0.775,
+            "turnover": 11.29,
+            "total_trades": 206,
+            "total_fees_usd": 1784.53,
+            "total_funding_usd": 8744.37,
+            "cost_drag_pct": 24.29
+          },
+          "V2": {
+            "final_equity": 50097.49055931902,
+            "cagr": 0.45034221731642776,
+            "cagr_pct": 45.03,
+            "sharpe": 1.119,
+            "sortino": 0.765,
+            "max_dd": -0.5018659108047114,
+            "max_dd_pct": 50.19,
+            "worst_month_pct": -43.18,
+            "avg_exposure": 0.399,
+            "turnover": 3.46,
+            "total_trades": 15,
+            "total_fees_usd": 967.31,
+            "total_funding_usd": 14781.55,
+            "cost_drag_pct": 36.34
+          }
+        }
+      },
+      "ETHUSDT": {
+        "10bps": {
+          "BH": {
+            "final_equity": 41045.37150670924,
+            "cagr": 0.38516068099678646,
+            "cagr_pct": 38.52,
+            "sharpe": 0.808,
+            "sortino": 0.828,
+            "max_dd": -0.8004745370322152,
+            "max_dd_pct": 80.05,
+            "worst_month_pct": -44.89,
+            "avg_exposure": 1.0,
+            "turnover": 0.23,
+            "total_trades": 1,
+            "total_fees_usd": 10.0,
+            "total_funding_usd": 23473.47,
+            "cost_drag_pct": 54.18
+          },
+          "V1": {
+            "final_equity": 26629.5109712505,
+            "cagr": 0.253560312729199,
+            "cagr_pct": 25.36,
+            "sharpe": 0.725,
+            "sortino": 0.744,
+            "max_dd": -0.6186565770084823,
+            "max_dd_pct": 61.87,
+            "worst_month_pct": -22.69,
+            "avg_exposure": 0.659,
+            "turnover": 8.44,
+            "total_trades": 198,
+            "total_fees_usd": 695.79,
+            "total_funding_usd": 8223.97,
+            "cost_drag_pct": 20.58
+          },
+          "V2": {
+            "final_equity": 61414.57412693385,
+            "cagr": 0.5201276774610375,
+            "cagr_pct": 52.01,
+            "sharpe": 0.979,
+            "sortino": 0.724,
+            "max_dd": -0.603187652880134,
+            "max_dd_pct": 60.32,
+            "worst_month_pct": -27.4,
+            "avg_exposure": 0.509,
+            "turnover": 4.38,
+            "total_trades": 19,
+            "total_fees_usd": 746.72,
+            "total_funding_usd": 22922.01,
+            "cost_drag_pct": 54.61
+          }
+        },
+        "20bps": {
+          "BH": {
+            "final_equity": 41007.858824735114,
+            "cagr": 0.3848684837551264,
+            "cagr_pct": 38.49,
+            "sharpe": 0.807,
+            "sortino": 0.828,
+            "max_dd": -0.8004745370322152,
+            "max_dd_pct": 80.05,
+            "worst_month_pct": -44.89,
+            "avg_exposure": 1.0,
+            "turnover": 0.23,
+            "total_trades": 1,
+            "total_fees_usd": 20.0,
+            "total_funding_usd": 23452.02,
+            "cost_drag_pct": 54.16
+          },
+          "V1": {
+            "final_equity": 25676.90638475483,
+            "cagr": 0.2430681170852933,
+            "cagr_pct": 24.31,
+            "sharpe": 0.706,
+            "sortino": 0.724,
+            "max_dd": -0.6214266562904789,
+            "max_dd_pct": 62.14,
+            "worst_month_pct": -22.75,
+            "avg_exposure": 0.659,
+            "turnover": 8.44,
+            "total_trades": 198,
+            "total_fees_usd": 1365.2,
+            "total_funding_usd": 8066.0,
+            "cost_drag_pct": 21.76
+          },
+          "V2": {
+            "final_equity": 60271.47208036057,
+            "cagr": 0.5135520778641118,
+            "cagr_pct": 51.36,
+            "sharpe": 0.972,
+            "sortino": 0.719,
+            "max_dd": -0.6051457321505193,
+            "max_dd_pct": 60.51,
+            "worst_month_pct": -27.69,
+            "avg_exposure": 0.509,
+            "turnover": 4.38,
+            "total_trades": 19,
+            "total_fees_usd": 1477.72,
+            "total_funding_usd": 22767.22,
+            "cost_drag_pct": 55.94
+          }
+        }
+      }
+    },
+    "Final": {
+      "BTCUSDT": {
+        "10bps": {
+          "BH": {
+            "final_equity": 7726.155741744166,
+            "cagr": -0.13046746694577305,
+            "cagr_pct": -13.05,
+            "sharpe": -0.11,
+            "sortino": -0.112,
+            "max_dd": -0.5418440683249318,
+            "max_dd_pct": 54.18,
+            "worst_month_pct": -21.48,
+            "avg_exposure": 1.0,
+            "turnover": 0.54,
+            "total_trades": 1,
+            "total_fees_usd": 10.0,
+            "total_funding_usd": 752.8,
+            "cost_drag_pct": 4.13
+          },
+          "V1": {
+            "final_equity": 8448.62589892481,
+            "cagr": -0.08730776476354096,
+            "cagr_pct": -8.73,
+            "sharpe": -0.075,
+            "sortino": -0.077,
+            "max_dd": -0.4869719201816631,
+            "max_dd_pct": 48.7,
+            "worst_month_pct": -19.07,
+            "avg_exposure": 0.873,
+            "turnover": 4.66,
+            "total_trades": 32,
+            "total_fees_usd": 81.11,
+            "total_funding_usd": 708.14,
+            "cost_drag_pct": 4.28
+          },
+          "V2": {
+            "final_equity": 7972.112603150553,
+            "cagr": -0.11557447935170317,
+            "cagr_pct": -11.56,
+            "sharpe": -0.374,
+            "sortino": -0.239,
+            "max_dd": -0.32152873763438705,
+            "max_dd_pct": 32.15,
+            "worst_month_pct": -17.97,
+            "avg_exposure": 0.398,
+            "turnover": 9.75,
+            "total_trades": 18,
+            "total_fees_usd": 148.8,
+            "total_funding_usd": 374.2,
+            "cost_drag_pct": 2.83
+          }
+        },
+        "20bps": {
+          "BH": {
+            "final_equity": 7718.503995409825,
+            "cagr": -0.13093424649453866,
+            "cagr_pct": -13.09,
+            "sharpe": -0.111,
+            "sortino": -0.114,
+            "max_dd": -0.5418440683249316,
+            "max_dd_pct": 54.18,
+            "worst_month_pct": -21.48,
+            "avg_exposure": 1.0,
+            "turnover": 0.54,
+            "total_trades": 1,
+            "total_fees_usd": 20.0,
+            "total_funding_usd": 752.06,
+            "cost_drag_pct": 4.18
+          },
+          "V1": {
+            "final_equity": 8375.941392147348,
+            "cagr": -0.09157129129387442,
+            "cagr_pct": -9.16,
+            "sharpe": -0.088,
+            "sortino": -0.09,
+            "max_dd": -0.48899072300271784,
+            "max_dd_pct": 48.9,
+            "worst_month_pct": -19.1,
+            "avg_exposure": 0.873,
+            "turnover": 4.66,
+            "total_trades": 32,
+            "total_fees_usd": 161.58,
+            "total_funding_usd": 704.44,
+            "cost_drag_pct": 4.69
+          },
+          "V2": {
+            "final_equity": 7829.688888299007,
+            "cagr": -0.12417232184179083,
+            "cagr_pct": -12.42,
+            "sharpe": -0.413,
+            "sortino": -0.264,
+            "max_dd": -0.32764524413483326,
+            "max_dd_pct": 32.76,
+            "worst_month_pct": -17.97,
+            "avg_exposure": 0.398,
+            "turnover": 9.75,
+            "total_trades": 18,
+            "total_fees_usd": 295.11,
+            "total_funding_usd": 371.23,
+            "cost_drag_pct": 3.61
+          }
+        }
+      },
+      "ETHUSDT": {
+        "10bps": {
+          "BH": {
+            "final_equity": 6370.189300861977,
+            "cagr": -0.21680948226182095,
+            "cagr_pct": -21.68,
+            "sharpe": -0.015,
+            "sortino": -0.016,
+            "max_dd": -0.6877708547792324,
+            "max_dd_pct": 68.78,
+            "worst_month_pct": -32.4,
+            "avg_exposure": 1.0,
+            "turnover": 0.54,
+            "total_trades": 1,
+            "total_fees_usd": 10.0,
+            "total_funding_usd": 581.9,
+            "cost_drag_pct": 3.21
+          },
+          "V1": {
+            "final_equity": 8793.304906580124,
+            "cagr": -0.06731442124732956,
+            "cagr_pct": -6.73,
+            "sharpe": 0.092,
+            "sortino": 0.097,
+            "max_dd": -0.5786541398400068,
+            "max_dd_pct": 57.87,
+            "worst_month_pct": -19.77,
+            "avg_exposure": 0.725,
+            "turnover": 5.09,
+            "total_trades": 43,
+            "total_fees_usd": 89.88,
+            "total_funding_usd": 515.76,
+            "cost_drag_pct": 3.28
+          },
+          "V2": {
+            "final_equity": 9447.988006073405,
+            "cagr": -0.030303025096980685,
+            "cagr_pct": -3.03,
+            "sharpe": 0.087,
+            "sortino": 0.046,
+            "max_dd": -0.38784003374741455,
+            "max_dd_pct": 38.78,
+            "worst_month_pct": -22.59,
+            "avg_exposure": 0.243,
+            "turnover": 7.59,
+            "total_trades": 14,
+            "total_fees_usd": 130.26,
+            "total_funding_usd": 331.31,
+            "cost_drag_pct": 2.5
+          }
+        },
+        "20bps": {
+          "BH": {
+            "final_equity": 6363.853965238473,
+            "cagr": -0.2172316781527105,
+            "cagr_pct": -21.72,
+            "sharpe": -0.016,
+            "sortino": -0.016,
+            "max_dd": -0.6877708547792327,
+            "max_dd_pct": 68.78,
+            "worst_month_pct": -32.4,
+            "avg_exposure": 1.0,
+            "turnover": 0.54,
+            "total_trades": 1,
+            "total_fees_usd": 20.0,
+            "total_funding_usd": 581.33,
+            "cost_drag_pct": 3.26
+          },
+          "V1": {
+            "final_equity": 8711.079334710957,
+            "cagr": -0.07205088005607896,
+            "cagr_pct": -7.21,
+            "sharpe": 0.081,
+            "sortino": 0.086,
+            "max_dd": -0.5807333867882079,
+            "max_dd_pct": 58.07,
+            "worst_month_pct": -19.82,
+            "avg_exposure": 0.725,
+            "turnover": 5.09,
+            "total_trades": 43,
+            "total_fees_usd": 178.95,
+            "total_funding_usd": 513.16,
+            "cost_drag_pct": 3.75
+          },
+          "V2": {
+            "final_equity": 9316.770717415493,
+            "cagr": -0.0376246383653307,
+            "cagr_pct": -3.76,
+            "sharpe": 0.065,
+            "sortino": 0.034,
+            "max_dd": -0.39214590298877444,
+            "max_dd_pct": 39.21,
+            "worst_month_pct": -23.13,
+            "avg_exposure": 0.243,
+            "turnover": 7.59,
+            "total_trades": 14,
+            "total_fees_usd": 258.8,
+            "total_funding_usd": 329.54,
+            "cost_drag_pct": 3.19
+          }
+        }
+      }
+    }
+  },
+  "bootstrap": {
+    "Development_BTCUSDT_V1": {
+      "diff_real": 0.034,
+      "ci_lower": -0.195,
+      "ci_upper": 0.312,
+      "p_value": 0.702,
+      "ci_str": "[-0.195, +0.312]"
+    },
+    "Development_BTCUSDT_V2": {
+      "diff_real": 0.286,
+      "ci_lower": -0.482,
+      "ci_upper": 1.1,
+      "p_value": 0.423,
+      "ci_str": "[-0.482, +1.100]"
+    },
+    "Development_ETHUSDT_V1": {
+      "diff_real": -0.083,
+      "ci_lower": -0.415,
+      "ci_upper": 0.224,
+      "p_value": 0.588,
+      "ci_str": "[-0.415, +0.224]"
+    },
+    "Development_ETHUSDT_V2": {
+      "diff_real": 0.171,
+      "ci_lower": -0.431,
+      "ci_upper": 0.828,
+      "p_value": 0.592,
+      "ci_str": "[-0.431, +0.828]"
+    },
+    "Final_BTCUSDT_V1": {
+      "diff_real": 0.035,
+      "ci_lower": -0.149,
+      "ci_upper": 0.201,
+      "p_value": 0.775,
+      "ci_str": "[-0.149, +0.201]"
+    },
+    "Final_BTCUSDT_V2": {
+      "diff_real": -0.264,
+      "ci_lower": -1.704,
+      "ci_upper": 1.072,
+      "p_value": 0.61,
+      "ci_str": "[-1.704, +1.072]"
+    },
+    "Final_ETHUSDT_V1": {
+      "diff_real": 0.107,
+      "ci_lower": -0.2,
+      "ci_upper": 0.388,
+      "p_value": 0.497,
+      "ci_str": "[-0.200, +0.388]"
+    },
+    "Final_ETHUSDT_V2": {
+      "diff_real": 0.102,
+      "ci_lower": -1.423,
+      "ci_upper": 1.434,
+      "p_value": 0.936,
+      "ci_str": "[-1.423, +1.434]"
+    }
+  },
+  "controls": {
+    "Development_BTCUSDT_V1": {
+      "p5_sharpe": 0.557,
+      "median_sharpe": 0.803,
+      "p95_sharpe": 1.053,
+      "beat_rate": 0.306,
+      "beat_rate_pct": 30.6
+    },
+    "Development_BTCUSDT_V2": {
+      "p5_sharpe": 0.235,
+      "median_sharpe": 0.73,
+      "p95_sharpe": 1.179,
+      "beat_rate": 0.088,
+      "beat_rate_pct": 8.8
+    },
+    "Development_ETHUSDT_V1": {
+      "p5_sharpe": 0.488,
+      "median_sharpe": 0.769,
+      "p95_sharpe": 1.006,
+      "beat_rate": 0.642,
+      "beat_rate_pct": 64.2
+    },
+    "Development_ETHUSDT_V2": {
+      "p5_sharpe": 0.419,
+      "median_sharpe": 0.744,
+      "p95_sharpe": 1.066,
+      "beat_rate": 0.118,
+      "beat_rate_pct": 11.8
+    },
+    "Final_BTCUSDT_V1": {
+      "p5_sharpe": -0.374,
+      "median_sharpe": -0.135,
+      "p95_sharpe": 0.129,
+      "beat_rate": 0.31,
+      "beat_rate_pct": 31.0
+    },
+    "Final_BTCUSDT_V2": {
+      "p5_sharpe": -0.716,
+      "median_sharpe": -0.149,
+      "p95_sharpe": 0.496,
+      "beat_rate": 0.726,
+      "beat_rate_pct": 72.6
+    },
+    "Final_ETHUSDT_V1": {
+      "p5_sharpe": -0.392,
+      "median_sharpe": 0.02,
+      "p95_sharpe": 0.412,
+      "beat_rate": 0.384,
+      "beat_rate_pct": 38.4
+    },
+    "Final_ETHUSDT_V2": {
+      "p5_sharpe": -0.834,
+      "median_sharpe": -0.021,
+      "p95_sharpe": 0.748,
+      "beat_rate": 0.382,
+      "beat_rate_pct": 38.2
+    }
+  },
+  "verdicts": {
+    "BTCUSDT_V1": {
+      "symbol": "BTCUSDT",
+      "strategy": "V1",
+      "passed": false,
+      "status": "FAIL",
+      "r1_sharpe_pass": true,
+      "r2_max_dd_pass": false,
+      "r3_cagr_double_pass": true,
+      "reasons": "MaxDD > 60% of B&H (Dev: 68.7% vs 48.4%, Final: 48.7% vs 32.5%)"
+    },
+    "BTCUSDT_V2": {
+      "symbol": "BTCUSDT",
+      "strategy": "V2",
+      "passed": false,
+      "status": "FAIL",
+      "r1_sharpe_pass": false,
+      "r2_max_dd_pass": false,
+      "r3_cagr_double_pass": true,
+      "reasons": "Sharpe lower than B&H (Dev: 1.13 vs 0.84, Final: -0.37 vs -0.11); MaxDD > 60% of B&H (Dev: 50.0% vs 48.4%, Final: 32.1% vs 32.5%)"
+    },
+    "ETHUSDT_V1": {
+      "symbol": "ETHUSDT",
+      "strategy": "V1",
+      "passed": false,
+      "status": "FAIL",
+      "r1_sharpe_pass": false,
+      "r2_max_dd_pass": false,
+      "r3_cagr_double_pass": true,
+      "reasons": "Sharpe lower than B&H (Dev: 0.72 vs 0.81, Final: 0.09 vs -0.01); MaxDD > 60% of B&H (Dev: 61.9% vs 48.0%, Final: 57.9% vs 41.3%)"
+    },
+    "ETHUSDT_V2": {
+      "symbol": "ETHUSDT",
+      "strategy": "V2",
+      "passed": false,
+      "status": "FAIL",
+      "r1_sharpe_pass": true,
+      "r2_max_dd_pass": false,
+      "r3_cagr_double_pass": true,
+      "reasons": "MaxDD > 60% of B&H (Dev: 60.3% vs 48.0%, Final: 38.8% vs 41.3%)"
+    }
+  }
+}

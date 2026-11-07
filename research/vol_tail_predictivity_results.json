@@ -15,7 +15,7 @@
         "extra": {}
       },
       "BTCUSDT_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00034,
         "aug_score": 0.00033,
         "improvement": 0.02798,
@@ -58,7 +58,7 @@
         "extra": {}
       },
       "ETHUSDT_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00051,
         "aug_score": 0.00052,
         "improvement": -0.01487,
@@ -101,7 +101,7 @@
         "extra": {}
       },
       "POOLED_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00085,
         "aug_score": 0.00085,
         "improvement": 0.00371,
@@ -147,7 +147,7 @@
         "p_adjusted": 0.5323
       },
       "BTCUSDT_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00031,
         "aug_score": 0.0003,
         "improvement": 0.03281,
@@ -193,7 +193,7 @@
         "p_adjusted": 0.426
       },
       "ETHUSDT_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00079,
         "aug_score": 0.00078,
         "improvement": 0.0166,
@@ -239,7 +239,7 @@
         "p_adjusted": 0.036
       },
       "POOLED_worst_drawdown": {
-        "metric_name": "OOS R-squared Improvement",
+        "metric_name": "relative MSE reduction",
         "base_score": 0.00109,
         "aug_score": 0.0011,
         "improvement": -0.0016,

@@ -17,6 +17,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from research.scripts.run_logger import (
+    log_final_split_read,
+    check_final_split_already_logged,
+    get_all_logged_runs,
+)
 from research.scripts.run_vol_tail_predictivity import (
     benjamini_hochberg_adjust,
     unlock_final,
@@ -51,6 +56,51 @@ class TestVolTailPredictivity(unittest.TestCase):
         self.assertTrue(final_unlocked())
         lock_final()
         self.assertFalse(final_unlocked())
+
+    def test_run_log_records_every_final_read(self):
+        """Verifies that data/run_log.jsonl records timestamp, experiment name, and git commit."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            rec = log_final_split_read(
+                experiment_name="test_experiment_alpha",
+                split="Final",
+                log_path=tmp_path
+            )
+            self.assertEqual(rec["experiment_name"], "test_experiment_alpha")
+            self.assertEqual(rec["split"], "Final")
+            self.assertIn("timestamp", rec)
+            self.assertIn("git_commit", rec)
+            self.assertTrue(check_final_split_already_logged("test_experiment_alpha", split="Final", log_path=tmp_path))
+
+            # Verify file content
+            runs = get_all_logged_runs(log_path=tmp_path)
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["experiment_name"], "test_experiment_alpha")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_run_log_duplicate_final_read_raises_error(self):
+        """Verifies that reading Final split when already logged for experiment raises PermissionError."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            log_final_split_read("test_experiment_beta", split="Final", log_path=tmp_path)
+            # Second attempt must raise PermissionError
+            with self.assertRaises(PermissionError):
+                log_final_split_read("test_experiment_beta", split="Final", log_path=tmp_path)
+
+            # Different experiment name must succeed
+            rec2 = log_final_split_read("test_experiment_gamma", split="Final", log_path=tmp_path)
+            self.assertEqual(rec2["experiment_name"], "test_experiment_gamma")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     def test_benjamini_hochberg_monotonic(self):
         """Verifies Benjamini-Hochberg FDR correction properties."""
