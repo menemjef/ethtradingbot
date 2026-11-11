@@ -58,3 +58,5 @@ data/backups/
 *.db-shm
 data/binance_vision/
 data/cache/
+
+data/chart_cnn/
