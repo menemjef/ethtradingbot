@@ -1,0 +1,140 @@
+{
+  "BTCUSDT": {
+    "symbol": "BTCUSDT",
+    "first_bar": "2020-01-01 00:00:00+00:00",
+    "last_bar": "2026-11-12 23:55:00+00:00",
+    "total_rows": 722304,
+    "duplicates_removed": 0,
+    "gaps_longer_than_10m_count": 0,
+    "gaps": [],
+    "rows_per_day": {
+      "expected": 288,
+      "total_days": 2508,
+      "days_with_288_bars": 2508,
+      "days_fewer_than_288": 0,
+      "days_more_than_288": 0,
+      "min_bars_in_day": 288,
+      "max_bars_in_day": 288,
+      "median_bars_in_day": 288
+    },
+    "hourly_comparison": {
+      "matched_hours_count": 60034,
+      "max_absolute_deviation": 120.19999999999709,
+      "max_deviation_bps": 17.257717157214227,
+      "mean_deviation_bps": 0.0005617495716613548,
+      "p99_deviation_bps": 0.0,
+      "top_5_deviations": [
+        {
+          "timestamp": "2024-10-28T21:00:00+00:00",
+          "hour_cache_close": 69650.0,
+          "5m_resampled_close": 69770.2,
+          "abs_diff": 120.19999999999709,
+          "diff_bps": 17.257717157214227
+        },
+        {
+          "timestamp": "2024-10-28T20:00:00+00:00",
+          "hour_cache_close": 69500.0,
+          "5m_resampled_close": 69566.1,
+          "abs_diff": 66.10000000000582,
+          "diff_bps": 9.510791366907311
+        },
+        {
+          "timestamp": "2023-11-10T15:00:00+00:00",
+          "hour_cache_close": 37092.6,
+          "5m_resampled_close": 37118.4,
+          "abs_diff": 25.80000000000291,
+          "diff_bps": 6.95556526099624
+        },
+        {
+          "timestamp": "2020-01-01T03:00:00+00:00",
+          "hour_cache_close": 7221.65,
+          "5m_resampled_close": 7221.65,
+          "abs_diff": 0.0,
+          "diff_bps": 0.0
+        },
+        {
+          "timestamp": "2020-01-01T04:00:00+00:00",
+          "hour_cache_close": 7213.86,
+          "5m_resampled_close": 7213.86,
+          "abs_diff": 0.0,
+          "diff_bps": 0.0
+        }
+      ]
+    },
+    "download_log_summary": {
+      "total_requests": 190,
+      "ok_count": 188,
+      "404_count": 2,
+      "error_count": 0
+    }
+  },
+  "ETHUSDT": {
+    "symbol": "ETHUSDT",
+    "first_bar": "2020-01-01 00:00:00+00:00",
+    "last_bar": "2026-11-12 23:55:00+00:00",
+    "total_rows": 722304,
+    "duplicates_removed": 0,
+    "gaps_longer_than_10m_count": 0,
+    "gaps": [],
+    "rows_per_day": {
+      "expected": 288,
+      "total_days": 2508,
+      "days_with_288_bars": 2508,
+      "days_fewer_than_288": 0,
+      "days_more_than_288": 0,
+      "min_bars_in_day": 288,
+      "max_bars_in_day": 288,
+      "median_bars_in_day": 288
+    },
+    "hourly_comparison": {
+      "matched_hours_count": 60034,
+      "max_absolute_deviation": 24.779999999999745,
+      "max_deviation_bps": 98.3754942594435,
+      "mean_deviation_bps": 0.002475360339915224,
+      "p99_deviation_bps": 0.0,
+      "top_5_deviations": [
+        {
+          "timestamp": "2024-10-28T21:00:00+00:00",
+          "hour_cache_close": 2518.92,
+          "5m_resampled_close": 2543.7,
+          "abs_diff": 24.779999999999745,
+          "diff_bps": 98.3754942594435
+        },
+        {
+          "timestamp": "2024-10-28T20:00:00+00:00",
+          "hour_cache_close": 2516.41,
+          "5m_resampled_close": 2503.77,
+          "abs_diff": 12.639999999999873,
+          "diff_bps": 50.23028838702705
+        },
+        {
+          "timestamp": "2020-01-01T02:00:00+00:00",
+          "hour_cache_close": 130.8,
+          "5m_resampled_close": 130.8,
+          "abs_diff": 0.0,
+          "diff_bps": 0.0
+        },
+        {
+          "timestamp": "2020-01-01T03:00:00+00:00",
+          "hour_cache_close": 130.09,
+          "5m_resampled_close": 130.09,
+          "abs_diff": 0.0,
+          "diff_bps": 0.0
+        },
+        {
+          "timestamp": "2020-01-01T04:00:00+00:00",
+          "hour_cache_close": 130.15,
+          "5m_resampled_close": 130.15,
+          "abs_diff": 0.0,
+          "diff_bps": 0.0
+        }
+      ]
+    },
+    "download_log_summary": {
+      "total_requests": 190,
+      "ok_count": 188,
+      "404_count": 2,
+      "error_count": 0
+    }
+  }
+}
